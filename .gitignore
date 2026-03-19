@@ -30,6 +30,12 @@ storage/
 # Docker runtime (volumes, not config)
 # Note: Dockerfile, docker-compose.yml, .dockerignore ARE tracked — they're project config
 
+# Vendor secrets (API keys, credentials)
+vendor/**/.env
+vendor/**/config.json
+vendor/**/*secret*
+vendor/**/*credential*
+
 # OS
 .DS_Store
 Thumbs.db
