@@ -1,0 +1,115 @@
+# ============================================
+# Sensitive Word Blocklist for Video Marketing
+# Format: one word per line, # for comments
+# ============================================
+
+# --- Content Type Restrictions (forbidden formats) ---
+出版物
+短篇小说
+漫画
+短剧
+网络小说
+有声书
+
+# --- Forbidden Themes ---
+同人文
+抗战
+穿越做皇帝
+当皇帝
+宫斗
+穿越剧
+修仙
+盗墓
+
+# --- Political Sensitive Terms ---
+习近平
+共产党
+政府
+法轮功
+六四
+天安门事件
+台独
+藏独
+疆独
+维权
+上访
+反党
+反华
+中共
+国家领导人
+政治体制改革
+颜色革命
+文化大革命
+大跃进
+反右
+
+# --- Legal / Regulatory ---
+翻墙
+VPN
+代理服务器
+暗网
+洗钱
+
+# --- Violence ---
+自杀
+自残
+杀人
+暴力
+恐怖袭击
+枪击
+爆炸物
+炸弹
+血腥
+
+# --- Adult / Pornographic ---
+色情
+裸体
+性爱
+情色
+卖淫
+嫖娼
+援交
+一夜情
+约炮
+
+# --- Gambling / Drugs ---
+赌博
+赌场
+博彩
+开奖
+下注
+毒品
+吸毒
+大麻
+冰毒
+海洛因
+摇头丸
+
+# --- Fraud / Deception ---
+刷单
+传销
+诈骗
+非法集资
+高回报
+稳赚不赔
+零风险
+保本保息
+
+# --- Platform Compliance (Ad-platform forbidden) ---
+最好
+最佳
+第一
+国家级
+世界级
+全网最低
+限时秒杀
+免费领取
+不看后悔
+震惊
+转疯了
+央视认证
+国家认可
+特效药
+根治
+包治百病
+祖传秘方
