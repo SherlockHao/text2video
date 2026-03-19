@@ -10,6 +10,7 @@ services:
       - .env
     volumes:
       - ./app:/app/app
+      - ./vendor:/app/vendor
 
   worker:
     build: .
@@ -19,6 +20,9 @@ services:
       - redis
     env_file:
       - .env
+    volumes:
+      - ./app:/app/app
+      - ./vendor:/app/vendor
 
   db:
     image: postgres:15-alpine

@@ -1,40 +1,82 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.dependencies import get_db
+from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-_NOT_IMPLEMENTED = {"detail": "Not implemented yet"}
+# Placeholder user_id until auth is implemented
+_DEFAULT_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 @router.post("", status_code=201, response_model=ProjectResponse)
-async def create_project(body: ProjectCreate) -> JSONResponse:
+async def create_project(
+    body: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
     """Create a new project."""
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED)
+    service = ProjectService(db)
+    project = await service.create_project(
+        user_id=_DEFAULT_USER_ID,
+        data=body.model_dump(),
+    )
+    return ProjectResponse.model_validate(project)
 
 
 @router.get("", response_model=list[ProjectResponse])
-async def list_projects() -> JSONResponse:
-    """List all projects."""
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED)
+async def list_projects(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProjectResponse]:
+    """List all projects (paginated)."""
+    service = ProjectService(db)
+    projects = await service.list_projects(
+        user_id=_DEFAULT_USER_ID, skip=skip, limit=limit
+    )
+    return [ProjectResponse.model_validate(p) for p in projects]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: UUID) -> JSONResponse:
+async def get_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
     """Get a single project by ID."""
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED)
+    service = ProjectService(db)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectResponse.model_validate(project)
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
-async def update_project(project_id: UUID, body: ProjectUpdate) -> JSONResponse:
+async def update_project(
+    project_id: UUID,
+    body: ProjectUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ProjectResponse:
     """Update a project."""
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED)
+    service = ProjectService(db)
+    project = await service.update_project(
+        project_id, body.model_dump(exclude_unset=True)
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectResponse.model_validate(project)
 
 
 @router.delete("/{project_id}", status_code=204)
-async def delete_project(project_id: UUID) -> JSONResponse:
+async def delete_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """Soft-delete a project."""
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED)
+    service = ProjectService(db)
+    deleted = await service.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")

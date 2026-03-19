@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir hatchling
 
 COPY pyproject.toml .
 COPY app/ app/
+COPY vendor/ vendor/
 RUN pip install --no-cache-dir .
 
 # Stage 2: Runtime
