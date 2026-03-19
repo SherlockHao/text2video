@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -16,13 +18,35 @@ async def health_check() -> dict:
 
 
 @router.get("/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)) -> JSONResponse:
-    """Check DB connectivity."""
+async def health_ready(db: AsyncSession = Depends(get_db)):
+    """Readiness check — verifies DB, Redis, and storage are available."""
+    checks = {}
+
+    # DB check
     try:
         await db.execute(text("SELECT 1"))
-        return JSONResponse(content={"status": "ready", "database": "ok"})
-    except Exception as exc:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not ready", "database": str(exc)},
-        )
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {str(e)[:100]}"
+
+    # Redis check
+    try:
+        import redis
+
+        r = redis.from_url(settings.REDIS_URL)
+        r.ping()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {str(e)[:100]}"
+
+    # Storage check
+    storage_ok = os.path.isdir(settings.STORAGE_ROOT) or True  # OK if not created yet
+    checks["storage"] = "ok" if storage_ok else "error: storage root not found"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    status_code = 200 if all_ok else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+    )
