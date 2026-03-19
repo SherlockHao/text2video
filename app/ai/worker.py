@@ -95,6 +95,8 @@ async def process_ai_task(ctx: dict, task_id: str) -> dict:
                 result = await _handle_video_generation(task, session)
             elif task.task_type == "tts_generation":
                 result = await _handle_tts_generation(task, session)
+            elif task.task_type == "assembly":
+                result = await _handle_assembly(task, session)
             else:
                 logger.warning("Unknown task_type: %s", task.task_type)
                 result = {"status": "failed", "error": f"Unknown task_type: {task.task_type}"}
@@ -563,6 +565,202 @@ async def _handle_tts_generation(task, session: AsyncSession) -> dict:
         await session.commit()
 
         return {"status": "running", "progress": job_status.progress}
+
+
+async def _handle_assembly(task, session: AsyncSession) -> dict:
+    """Handle the assembly task type.
+
+    Workflow:
+    1. Load project + latest storyboard with shots.
+    2. For each shot (ordered by sequence_number):
+       a. Get shot's video asset (generated_video_id -> storage_path)
+       b. Get shot's TTS audio asset (tts_audio_id -> storage_path)
+       c. Call align_video_to_audio() to create an aligned clip.
+    3. Concatenate all aligned clips into a final MP4.
+    4. Create ZIP asset package with individual clips, audio, and final MP4.
+    5. Create Asset records for final_video and asset_package.
+    6. Update project.current_step = "completed".
+    7. Update task status.
+    """
+    import os
+    import uuid as _uuid
+
+    from app.core.config import settings
+    from app.repositories.asset_repo import AssetRepository
+    from app.repositories.project_repo import ProjectRepository
+    from app.repositories.shot_repo import ShotRepository
+    from app.repositories.storyboard_repo import StoryboardRepository
+    from app.services.ffmpeg_utils import (
+        align_video_to_audio,
+        concatenate_clips,
+        create_asset_package,
+    )
+
+    project_repo = ProjectRepository(session)
+    storyboard_repo = StoryboardRepository(session)
+    shot_repo = ShotRepository(session)
+    asset_repo = AssetRepository(session)
+
+    # 1. Load project and latest storyboard
+    project = await project_repo.get_by_id(task.project_id)
+    if not project:
+        task.status = "failed"
+        task.error_message = "Project not found"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+        return {"status": "failed", "error": "Project not found"}
+
+    storyboard = await storyboard_repo.get_latest_by_project_id(task.project_id)
+    if not storyboard:
+        task.status = "failed"
+        task.error_message = "No storyboard found for project"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+        return {"status": "failed", "error": "No storyboard found for project"}
+
+    shots = await shot_repo.get_by_storyboard_id(storyboard.id)
+    if not shots:
+        task.status = "failed"
+        task.error_message = "No shots found in storyboard"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+        return {"status": "failed", "error": "No shots found in storyboard"}
+
+    # Prepare output directories
+    assembly_dir = os.path.join(
+        settings.STORAGE_ROOT,
+        "projects",
+        str(task.project_id),
+        "assembly",
+    )
+    os.makedirs(assembly_dir, exist_ok=True)
+
+    # 2. Align each shot's video to its TTS audio
+    aligned_clips: list[str] = []
+    package_files: dict[str, str] = {}
+
+    for idx, shot in enumerate(shots):
+        # Get video asset
+        if not shot.generated_video_id:
+            logger.warning("Shot %s has no generated video, skipping", shot.id)
+            continue
+        video_asset = await asset_repo.get_by_id(shot.generated_video_id)
+        if not video_asset:
+            logger.warning("Video asset %s not found for shot %s", shot.generated_video_id, shot.id)
+            continue
+
+        # Get TTS audio asset
+        if not shot.tts_audio_id:
+            logger.warning("Shot %s has no TTS audio, skipping", shot.id)
+            continue
+        audio_asset = await asset_repo.get_by_id(shot.tts_audio_id)
+        if not audio_asset:
+            logger.warning("Audio asset %s not found for shot %s", shot.tts_audio_id, shot.id)
+            continue
+
+        # Align video to audio
+        aligned_path = os.path.join(assembly_dir, f"shot_{shot.sequence_number:03d}_aligned.mp4")
+        success = align_video_to_audio(
+            video_path=video_asset.storage_path,
+            audio_path=audio_asset.storage_path,
+            output_path=aligned_path,
+        )
+
+        if success:
+            aligned_clips.append(aligned_path)
+            package_files[f"clips/shot_{shot.sequence_number:03d}.mp4"] = aligned_path
+            package_files[f"audio/shot_{shot.sequence_number:03d}.mp3"] = audio_asset.storage_path
+        else:
+            logger.error("Failed to align shot %s", shot.id)
+
+        # Update progress
+        task.progress = (idx + 1) / (len(shots) + 1)
+        await session.flush()
+
+    if not aligned_clips:
+        task.status = "failed"
+        task.error_message = "No clips were successfully aligned"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+        return {"status": "failed", "error": "No clips were successfully aligned"}
+
+    # 3. Concatenate all aligned clips into final video
+    final_video_name = f"final_{_uuid.uuid4()}.mp4"
+    final_video_path = os.path.join(assembly_dir, final_video_name)
+
+    if not concatenate_clips(aligned_clips, final_video_path):
+        task.status = "failed"
+        task.error_message = "Failed to concatenate clips into final video"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+        return {"status": "failed", "error": "Failed to concatenate clips"}
+
+    # Add final video to package
+    package_files["final_video.mp4"] = final_video_path
+
+    # 4. Create ZIP asset package
+    zip_name = f"assets_{_uuid.uuid4()}.zip"
+    zip_path = os.path.join(assembly_dir, zip_name)
+    create_asset_package(package_files, zip_path)
+
+    # 5. Create Asset records
+    final_video_size = os.path.getsize(final_video_path) if os.path.exists(final_video_path) else 0
+    final_video_asset = await asset_repo.create({
+        "project_id": task.project_id,
+        "file_name": final_video_name,
+        "file_type": "video/mp4",
+        "storage_path": final_video_path,
+        "file_size_bytes": final_video_size,
+        "asset_category": "final_video",
+        "source_task_id": task.id,
+        "metadata_": {"shot_count": len(aligned_clips)},
+    })
+
+    zip_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+    zip_asset = await asset_repo.create({
+        "project_id": task.project_id,
+        "file_name": zip_name,
+        "file_type": "application/zip",
+        "storage_path": zip_path,
+        "file_size_bytes": zip_size,
+        "asset_category": "asset_package",
+        "source_task_id": task.id,
+        "metadata_": {"included_files": list(package_files.keys())},
+    })
+
+    # 6. Update project step
+    project.current_step = "completed"
+    await session.flush()
+
+    # 7. Update task status
+    task.status = "completed"
+    task.output_result = {
+        "final_video_asset_id": str(final_video_asset.id),
+        "asset_package_id": str(zip_asset.id),
+        "final_video_path": final_video_path,
+        "asset_package_path": zip_path,
+        "aligned_clip_count": len(aligned_clips),
+    }
+    task.progress = 1.0
+    task.completed_at = datetime.now(timezone.utc)
+    await session.flush()
+    await session.commit()
+
+    logger.info(
+        "Assembly completed for project %s: %d clips, final video at %s",
+        task.project_id, len(aligned_clips), final_video_path,
+    )
+
+    return {
+        "status": "completed",
+        "final_video_asset_id": str(final_video_asset.id),
+        "asset_package_id": str(zip_asset.id),
+    }
 
 
 def _parse_redis_settings() -> RedisSettings:
