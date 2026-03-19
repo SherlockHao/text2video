@@ -24,6 +24,8 @@ import app.ai.providers.qwen  # noqa: F401
 import app.ai.providers.jimeng  # noqa: F401
 import app.ai.providers.elevenlabs  # noqa: F401
 import app.ai.providers.minimax_tts  # noqa: F401
+import app.ai.providers.seedance2  # noqa: F401
+import app.ai.providers.kling  # noqa: F401
 import app.ai.prompts.narration_manga  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,8 @@ async def process_ai_task(ctx: dict, task_id: str) -> dict:
                 result = await _handle_script_breakdown(task, session)
             elif task.task_type == "image_generation":
                 result = await _handle_image_generation(task, session)
+            elif task.task_type == "video_generation":
+                result = await _handle_video_generation(task, session)
             elif task.task_type == "tts_generation":
                 result = await _handle_tts_generation(task, session)
             else:
@@ -273,6 +277,146 @@ async def _handle_image_generation(task, session: AsyncSession) -> dict:
 
         task.status = "failed"
         task.error_message = job_status.error or "Image generation failed"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {"status": "failed", "error": task.error_message}
+
+    else:
+        task.status = "running"
+        task.progress = job_status.progress
+        await session.flush()
+        await session.commit()
+
+        return {"status": "running", "progress": job_status.progress}
+
+
+async def _handle_video_generation(task, session: AsyncSession) -> dict:
+    """Handle the video_generation task type.
+
+    Workflow:
+    1. Get the video provider via the router (quality_tier selects seedance2 or kling).
+    2. Submit the I2V job (blocks until the vendor returns the video).
+    3. Poll for the cached result.
+    4. On success: save video to local storage as MP4, create an Asset record,
+       and update the associated shot's video_status / generated_video_id.
+    5. Update task status accordingly.
+    """
+    import os
+    import uuid as _uuid
+
+    from app.ai.base import JobState
+    from app.ai.providers import get_provider
+    from app.core.config import settings
+    from app.repositories.asset_repo import AssetRepository
+    from app.repositories.shot_repo import ShotRepository
+
+    # Determine quality tier from input_params or default
+    quality_tier = (task.input_params or {}).get("quality_tier")
+    provider = get_provider("video_generation", quality_tier)
+
+    # Build provider params — image_path comes from the shot's selected_image asset
+    provider_params = dict(task.input_params or {})
+
+    # If image_path not directly provided, look it up from the shot's selected image
+    if "image_path" not in provider_params and task.shot_id:
+        shot_repo = ShotRepository(session)
+        shot = await shot_repo.get_by_id(task.shot_id)
+        if shot and shot.selected_image_id:
+            asset_repo = AssetRepository(session)
+            image_asset = await asset_repo.get_by_id(shot.selected_image_id)
+            if image_asset:
+                provider_params["image_path"] = image_asset.storage_path
+        if shot and not provider_params.get("prompt"):
+            # Use scene_description as motion prompt fallback
+            provider_params.setdefault("prompt", shot.scene_description or "")
+
+    # Submit job
+    external_job_id = await provider.submit_job(provider_params)
+    task.external_job_id = external_job_id
+    task.provider_name = provider.provider_name
+    await session.flush()
+
+    # Poll for result (returns cached result immediately for sync providers)
+    job_status = await provider.poll_job(external_job_id)
+
+    if job_status.state == JobState.COMPLETED:
+        video_bytes = job_status.result_data
+
+        asset_id = None
+        storage_path = ""
+
+        if video_bytes:
+            # Save video to local storage
+            project_dir = os.path.join(
+                settings.STORAGE_ROOT,
+                "projects",
+                str(task.project_id),
+                "videos",
+            )
+            os.makedirs(project_dir, exist_ok=True)
+
+            file_name = f"{_uuid.uuid4()}.mp4"
+            storage_path = os.path.join(project_dir, file_name)
+
+            with open(storage_path, "wb") as f:
+                f.write(video_bytes)
+
+            logger.info("Saved video to %s (%d bytes)", storage_path, len(video_bytes))
+
+            # Create Asset record
+            asset_repo = AssetRepository(session)
+            asset = await asset_repo.create({
+                "project_id": task.project_id,
+                "file_name": file_name,
+                "file_type": "video/mp4",
+                "storage_path": storage_path,
+                "file_size_bytes": len(video_bytes),
+                "asset_category": "shot_video",
+                "source_task_id": task.id,
+                "metadata_": job_status.metadata.get("data", {}),
+            })
+            asset_id = asset.id
+
+        # Update shot video_status if shot_id is set
+        if task.shot_id:
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.video_status = "completed"
+                if asset_id:
+                    shot.generated_video_id = asset_id
+                await session.flush()
+
+        # Mark task completed
+        task.status = "completed"
+        task.output_result = {
+            "asset_id": str(asset_id) if asset_id else None,
+            "storage_path": storage_path,
+            "jimeng_task_id": job_status.metadata.get("jimeng_task_id"),
+        }
+        task.progress = 1.0
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {
+            "status": "completed",
+            "asset_id": str(asset_id) if asset_id else None,
+        }
+
+    elif job_status.state == JobState.FAILED:
+        # Update shot video_status to failed if applicable
+        if task.shot_id:
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.video_status = "failed"
+                await session.flush()
+
+        task.status = "failed"
+        task.error_message = job_status.error or "Video generation failed"
         task.completed_at = datetime.now(timezone.utc)
         await session.flush()
         await session.commit()
