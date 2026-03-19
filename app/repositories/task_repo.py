@@ -21,6 +21,18 @@ class TaskRepository(BaseRepository[AITask]):
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
+    async def get_by_project_id(
+        self, project_id: uuid.UUID, task_type: str | None = None, status: str | None = None
+    ) -> list[AITask]:
+        query = select(AITask).where(AITask.project_id == project_id)
+        if task_type is not None:
+            query = query.where(AITask.task_type == task_type)
+        if status is not None:
+            query = query.where(AITask.status == status)
+        query = query.order_by(AITask.created_at.asc())
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
     async def update_progress(
         self, task_id: uuid.UUID, progress: float
     ) -> AITask | None:

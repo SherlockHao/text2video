@@ -3,8 +3,14 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
-from app.dependencies import get_db
+from app.api.schemas.project import (
+    ProjectCreate,
+    ProjectResponse,
+    ProjectStatusResponse,
+    ProjectUpdate,
+    ResumeResponse,
+)
+from app.dependencies import get_arq_pool, get_db
 from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -80,3 +86,32 @@ async def delete_project(
     deleted = await service.delete_project(project_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+@router.get("/{project_id}/status", response_model=ProjectStatusResponse)
+async def get_project_status(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ProjectStatusResponse:
+    """Get comprehensive project pipeline status."""
+    service = ProjectService(db)
+    try:
+        status = await service.get_project_status(project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ProjectStatusResponse(**status)
+
+
+@router.post("/{project_id}/resume", response_model=ResumeResponse)
+async def resume_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
+) -> ResumeResponse:
+    """Resume a project from checkpoint (retry failed tasks)."""
+    service = ProjectService(db)
+    try:
+        result = await service.resume_from_checkpoint(project_id, arq_pool=arq_pool)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ResumeResponse(**result)

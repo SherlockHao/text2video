@@ -46,3 +46,19 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectStatusResponse(BaseModel):
+    project_id: UUID
+    project_name: str
+    current_step: str
+    overall_progress: float
+    is_complete: bool
+    failed_stages: list[str]
+    next_stages: list[str]
+    pipeline: dict  # {stage: {total, completed, failed, progress, is_complete}}
+
+
+class ResumeResponse(BaseModel):
+    resumed_tasks: int
+    task_ids: list[str]
