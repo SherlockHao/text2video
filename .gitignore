@@ -31,10 +31,12 @@ storage/
 # Note: Dockerfile, docker-compose.yml, .dockerignore ARE tracked — they're project config
 
 # Vendor secrets (API keys, credentials)
+vendor/**/config.py
 vendor/**/.env
 vendor/**/config.json
 vendor/**/*secret*
 vendor/**/*credential*
+vendor/**/__pycache__/
 
 # OS
 .DS_Store
