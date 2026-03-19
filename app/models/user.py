@@ -24,3 +24,4 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     projects = relationship("Project", back_populates="user", lazy="selectin")
+    characters = relationship("Character", back_populates="user")

@@ -1,41 +1,47 @@
-import asyncio
+"""
+arq worker for processing AI tasks.
+
+The worker:
+1. Loads task details from DB
+2. Routes to the correct provider via ProviderRouter
+3. Handles submit -> poll -> download -> store lifecycle
+4. Updates task status in DB at each step
+5. Manages checkpoint/resume via checkpoint_data
+
+Phase 0: Dispatcher skeleton. Provider-specific handlers added in later phases.
+"""
+
 import logging
 
 from arq.connections import RedisSettings
 
 from app.core.config import settings
-from app.ai.providers import get_provider
 
 logger = logging.getLogger(__name__)
 
 
-async def process_ai_task(ctx: dict, task_id: str) -> None:
-    """Process an AI generation task dispatched via arq.
+async def process_ai_task(ctx: dict, task_id: str) -> dict:
+    """
+    Main worker function. Dispatches to the appropriate handler based on task_type.
 
     Args:
-        ctx: arq worker context.
-        task_id: Unique identifier for the task to process.
+        ctx: arq worker context
+        task_id: UUID of the AITask to process
+
+    Returns:
+        dict with status and result info
     """
-    logger.info("Starting AI task: %s", task_id)
+    logger.info("Processing task: %s", task_id)
 
-    # TODO: look up task details from DB to determine provider type
-    # For now, default to text_to_video as a placeholder
-    task_type = "text_to_video"
+    # TODO (Phase 2+): Load task from DB, route to handler, update status
+    # Skeleton for now — each phase will add its handler
 
-    try:
-        provider = get_provider(task_type)
-        logger.info("Using provider '%s' for task %s", provider.provider_name, task_id)
-        await asyncio.sleep(1)  # placeholder for actual work
-        logger.info("AI task %s completed successfully", task_id)
-    except Exception:
-        logger.exception("AI task %s failed", task_id)
-        raise
+    return {"task_id": task_id, "status": "not_implemented"}
 
 
 def _parse_redis_settings() -> RedisSettings:
     """Derive arq RedisSettings from the application REDIS_URL."""
-    url = settings.REDIS_URL  # e.g. redis://redis:6379/0
-    # Strip scheme
+    url = settings.REDIS_URL
     stripped = url.replace("redis://", "")
     host_port, _, database = stripped.partition("/")
     host, _, port_str = host_port.partition(":")
@@ -45,7 +51,8 @@ def _parse_redis_settings() -> RedisSettings:
 
 
 class WorkerSettings:
-    """arq worker settings — referenced by ``arq worker app.ai.worker.WorkerSettings``."""
-
+    """arq worker settings."""
     functions = [process_ai_task]
     redis_settings = _parse_redis_settings()
+    max_jobs = 10
+    job_timeout = 600  # 10 minutes max per task

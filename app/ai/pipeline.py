@@ -1,90 +1,90 @@
-import asyncio
-import logging
-from typing import List, Tuple
+"""
+Pipeline orchestrator for video production workflow.
 
-from app.ai.base import AIProvider, AIResult
+Manages the DAG of tasks for a project:
+  ScriptBreakdown -> (ImageGen || TTS) -> VideoGen -> Assembly
+
+Phase 0: Skeleton only. Full implementation in Phase 7.
+"""
+
+import logging
+from dataclasses import dataclass
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 
-class AIPipeline:
-    """Orchestrates a sequence of AI provider stages."""
+class PipelineStage(str, Enum):
+    SCRIPT_BREAKDOWN = "script_breakdown"
+    IMAGE_GENERATION = "image_generation"
+    TTS_GENERATION = "tts_generation"
+    VIDEO_GENERATION = "video_generation"
+    ASSEMBLY = "assembly"
 
-    MAX_RETRIES = 3
-    BASE_BACKOFF = 1.0  # seconds
 
-    def __init__(self, stages: List[Tuple[str, AIProvider]]) -> None:
-        self.stages = stages
+# Stage dependency graph
+STAGE_DEPENDENCIES: dict[PipelineStage, list[PipelineStage]] = {
+    PipelineStage.SCRIPT_BREAKDOWN: [],
+    PipelineStage.IMAGE_GENERATION: [PipelineStage.SCRIPT_BREAKDOWN],
+    PipelineStage.TTS_GENERATION: [PipelineStage.SCRIPT_BREAKDOWN],
+    PipelineStage.VIDEO_GENERATION: [PipelineStage.IMAGE_GENERATION],
+    PipelineStage.ASSEMBLY: [PipelineStage.VIDEO_GENERATION, PipelineStage.TTS_GENERATION],
+}
 
-    async def run(self, params: dict) -> AIResult:
-        """Execute all stages sequentially with retry and progress tracking."""
-        total = len(self.stages)
-        aggregated_metadata: dict = {}
 
-        for idx, (name, provider) in enumerate(self.stages):
-            progress = idx / total
-            logger.info(
-                "Pipeline stage [%s] starting (progress %.0f%%)",
-                name,
-                progress * 100,
-            )
+@dataclass
+class StageStatus:
+    stage: PipelineStage
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    failed_tasks: int = 0
+    is_complete: bool = False
+    is_failed: bool = False
 
-            result = await self._run_with_retry(name, provider, params)
+    @property
+    def progress(self) -> float:
+        if self.total_tasks == 0:
+            return 0.0
+        return self.completed_tasks / self.total_tasks
 
-            if not result.success:
-                logger.error(
-                    "Pipeline stage [%s] failed: %s", name, result.error
-                )
-                result.metadata["pipeline_progress"] = progress
-                return result
 
-            logger.info("Pipeline stage [%s] complete", name)
-            aggregated_metadata[name] = result.metadata
-            # Feed the output of the current stage into the next one
-            params = {**params, f"{name}_output_url": result.output_url}
+class PipelineOrchestrator:
+    """
+    Orchestrates the video production pipeline for a project.
 
-        final_progress = 1.0
-        logger.info("Pipeline finished (progress %.0f%%)", final_progress * 100)
-        return AIResult(
-            success=True,
-            output_url=result.output_url,
-            metadata={
-                "pipeline_progress": final_progress,
-                "stages": aggregated_metadata,
-            },
+    Skeleton implementation — will be fully built in Phase 7.
+    """
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        self._stages: dict[PipelineStage, StageStatus] = {}
+
+    def can_start_stage(self, stage: PipelineStage) -> bool:
+        """Check if all dependencies for a stage are completed."""
+        deps = STAGE_DEPENDENCIES.get(stage, [])
+        return all(
+            self._stages.get(dep, StageStatus(stage=dep)).is_complete
+            for dep in deps
         )
 
-    async def _run_with_retry(
-        self, name: str, provider: AIProvider, params: dict
-    ) -> AIResult:
-        last_error: str | None = None
-        for attempt in range(1, self.MAX_RETRIES + 1):
-            try:
-                result = await provider.generate(params)
-                if result.success:
-                    return result
-                last_error = result.error
-            except Exception as exc:
-                last_error = str(exc)
-                logger.warning(
-                    "Pipeline stage [%s] attempt %d raised: %s",
-                    name,
-                    attempt,
-                    last_error,
-                )
+    def get_next_stages(self) -> list[PipelineStage]:
+        """Get stages that are ready to start."""
+        ready = []
+        for stage in PipelineStage:
+            status = self._stages.get(stage)
+            if status is None and self.can_start_stage(stage):
+                ready.append(stage)
+            elif status and not status.is_complete and not status.is_failed:
+                # Stage in progress, don't start new ones in same track
+                pass
+        return ready
 
-            if attempt < self.MAX_RETRIES:
-                backoff = self.BASE_BACKOFF * (2 ** (attempt - 1))
-                logger.info(
-                    "Retrying stage [%s] in %.1fs (attempt %d/%d)",
-                    name,
-                    backoff,
-                    attempt + 1,
-                    self.MAX_RETRIES,
-                )
-                await asyncio.sleep(backoff)
-
-        return AIResult(
-            success=False,
-            error=f"Stage '{name}' failed after {self.MAX_RETRIES} retries: {last_error}",
+    def get_overall_progress(self) -> float:
+        """Get overall pipeline progress (0.0 to 1.0)."""
+        if not self._stages:
+            return 0.0
+        total_weight = len(PipelineStage)
+        completed_weight = sum(
+            1 for s in self._stages.values() if s.is_complete
         )
+        return completed_weight / total_weight

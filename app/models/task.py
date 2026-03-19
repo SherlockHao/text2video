@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,6 +29,21 @@ class AITask(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # New columns
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ai_tasks.id"), index=True, nullable=True
+    )
+    shot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shots.id", use_alter=True), index=True, nullable=True
+    )
+    step_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    provider_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    external_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    checkpoint_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
 
     project = relationship("Project", back_populates="tasks", lazy="selectin")
 
