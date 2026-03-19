@@ -22,6 +22,7 @@ from app.core.config import settings
 # Import providers and prompts so they register themselves
 import app.ai.providers.qwen  # noqa: F401
 import app.ai.providers.jimeng  # noqa: F401
+import app.ai.providers.elevenlabs  # noqa: F401
 import app.ai.prompts.narration_manga  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,8 @@ async def process_ai_task(ctx: dict, task_id: str) -> dict:
                 result = await _handle_script_breakdown(task, session)
             elif task.task_type == "image_generation":
                 result = await _handle_image_generation(task, session)
+            elif task.task_type == "tts_generation":
+                result = await _handle_tts_generation(task, session)
             else:
                 logger.warning("Unknown task_type: %s", task.task_type)
                 result = {"status": "failed", "error": f"Unknown task_type: {task.task_type}"}
@@ -269,6 +272,139 @@ async def _handle_image_generation(task, session: AsyncSession) -> dict:
 
         task.status = "failed"
         task.error_message = job_status.error or "Image generation failed"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {"status": "failed", "error": task.error_message}
+
+    else:
+        task.status = "running"
+        task.progress = job_status.progress
+        await session.flush()
+        await session.commit()
+
+        return {"status": "running", "progress": job_status.progress}
+
+
+async def _handle_tts_generation(task, session: AsyncSession) -> dict:
+    """Handle the tts_generation task type.
+
+    Workflow:
+    1. Get the ElevenLabs provider via the router.
+    2. Submit the TTS job (blocks until ElevenLabs returns audio).
+    3. Poll for the cached result.
+    4. On success: save audio to local storage as MP3, create an Asset record,
+       and update the associated shot's tts_status.
+    5. Update task status accordingly.
+    """
+    import os
+    import uuid as _uuid
+
+    from app.ai.base import JobState
+    from app.ai.providers import get_provider
+    from app.core.config import settings
+    from app.repositories.asset_repo import AssetRepository
+    from app.repositories.shot_repo import ShotRepository
+
+    provider = get_provider("tts_generation")
+
+    # Submit job (ElevenLabs provider does the API call in submit)
+    external_job_id = await provider.submit_job(task.input_params)
+    task.external_job_id = external_job_id
+    task.provider_name = provider.provider_name
+    await session.flush()
+
+    # Poll for result (returns cached result immediately)
+    job_status = await provider.poll_job(external_job_id)
+
+    if job_status.state == JobState.COMPLETED:
+        audio_bytes = job_status.result_data
+
+        asset_id = None
+        storage_path = ""
+
+        if audio_bytes:
+            # Save audio to local storage
+            project_dir = os.path.join(
+                settings.STORAGE_ROOT,
+                "projects",
+                str(task.project_id),
+                "audio",
+            )
+            os.makedirs(project_dir, exist_ok=True)
+
+            file_name = f"{_uuid.uuid4()}.mp3"
+            storage_path = os.path.join(project_dir, file_name)
+
+            with open(storage_path, "wb") as f:
+                f.write(audio_bytes)
+
+            logger.info("Saved TTS audio to %s (%d bytes)", storage_path, len(audio_bytes))
+
+            # Create Asset record
+            asset_repo = AssetRepository(session)
+            asset = await asset_repo.create({
+                "project_id": task.project_id,
+                "file_name": file_name,
+                "file_type": "audio/mpeg",
+                "storage_path": storage_path,
+                "file_size_bytes": len(audio_bytes),
+                "asset_category": "tts_audio",
+                "source_task_id": task.id,
+                "metadata_": {
+                    "voice_id": job_status.metadata.get("voice_id"),
+                    "model_id": job_status.metadata.get("model_id"),
+                    "text_length": job_status.metadata.get("text_length"),
+                },
+            })
+            asset_id = asset.id
+
+        # Estimate audio duration: ~15 characters per second for most languages
+        text = task.input_params.get("text", "")
+        estimated_duration = len(text) / 15.0 if text else None
+
+        # Update shot tts_status if shot_id is set
+        if task.shot_id:
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.tts_status = "completed"
+                if asset_id:
+                    shot.tts_audio_id = asset_id
+                if estimated_duration is not None:
+                    shot.duration_seconds = estimated_duration
+                await session.flush()
+
+        # Mark task completed
+        task.status = "completed"
+        task.output_result = {
+            "asset_id": str(asset_id) if asset_id else None,
+            "storage_path": storage_path,
+            "estimated_duration_seconds": estimated_duration,
+            "voice_id": job_status.metadata.get("voice_id"),
+        }
+        task.progress = 1.0
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {
+            "status": "completed",
+            "asset_id": str(asset_id) if asset_id else None,
+        }
+
+    elif job_status.state == JobState.FAILED:
+        # Update shot tts_status to failed if applicable
+        if task.shot_id:
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.tts_status = "failed"
+                await session.flush()
+
+        task.status = "failed"
+        task.error_message = job_status.error or "TTS generation failed"
         task.completed_at = datetime.now(timezone.utc)
         await session.flush()
         await session.commit()
