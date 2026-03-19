@@ -163,9 +163,9 @@ class StoryboardService:
                     "storyboard_id": storyboard.id,
                     "sequence_number": shot_data.get("shot_number", idx + 1),
                     "scene_number": shot_data.get("scene_number", 1),
-                    "image_prompt": shot_data.get("prompt_en"),
-                    "narration_text": " ".join(narration_parts) if narration_parts else shot_data.get("narration"),
-                    "scene_description": shot_data.get("description", shot_data.get("scene_description")),
+                    "image_prompt": shot_data.get("image_prompt") or shot_data.get("prompt_en"),
+                    "narration_text": " ".join(narration_parts) if narration_parts else shot_data.get("narration_text") or shot_data.get("narration"),
+                    "scene_description": shot_data.get("scene_description") or shot_data.get("description") or shot_data.get("description_zh"),
                     "duration_seconds": shot_data.get("duration_seconds"),
                 }
             )

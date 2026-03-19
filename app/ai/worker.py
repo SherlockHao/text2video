@@ -21,6 +21,7 @@ from app.core.config import settings
 
 # Import providers and prompts so they register themselves
 import app.ai.providers.qwen  # noqa: F401
+import app.ai.providers.jimeng  # noqa: F401
 import app.ai.prompts.narration_manga  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,8 @@ async def process_ai_task(ctx: dict, task_id: str) -> dict:
         try:
             if task.task_type == "script_breakdown":
                 result = await _handle_script_breakdown(task, session)
+            elif task.task_type == "image_generation":
+                result = await _handle_image_generation(task, session)
             else:
                 logger.warning("Unknown task_type: %s", task.task_type)
                 result = {"status": "failed", "error": f"Unknown task_type: {task.task_type}"}
@@ -148,6 +151,131 @@ async def _handle_script_breakdown(task, session: AsyncSession) -> dict:
 
     else:
         # Shouldn't happen for sync Qwen provider, but handle gracefully
+        task.status = "running"
+        task.progress = job_status.progress
+        await session.flush()
+        await session.commit()
+
+        return {"status": "running", "progress": job_status.progress}
+
+
+async def _handle_image_generation(task, session: AsyncSession) -> dict:
+    """Handle the image_generation task type.
+
+    Workflow:
+    1. Get the Jimeng provider via the router.
+    2. Submit the image generation job (blocks until Jimeng returns).
+    3. Poll for the cached result.
+    4. On success: save image to local storage, create an Asset record,
+       and update the associated shot's image_status.
+    5. Update task status accordingly.
+    """
+    import os
+    import uuid as _uuid
+
+    from app.ai.base import JobState
+    from app.ai.providers import get_provider
+    from app.core.config import settings
+    from app.models.asset import Asset
+    from app.repositories.asset_repo import AssetRepository
+    from app.repositories.shot_repo import ShotRepository
+
+    provider = get_provider("image_generation")
+
+    # Submit job (Jimeng provider does submit + internal poll in one shot)
+    external_job_id = await provider.submit_job(task.input_params)
+    task.external_job_id = external_job_id
+    task.provider_name = provider.provider_name
+    await session.flush()
+
+    # Poll for result (returns cached result immediately)
+    job_status = await provider.poll_job(external_job_id)
+
+    if job_status.state == JobState.COMPLETED:
+        image_bytes = job_status.result_data
+
+        asset_id = None
+        storage_path = ""
+
+        if image_bytes:
+            # Save image to local storage
+            project_dir = os.path.join(
+                settings.STORAGE_ROOT,
+                "projects",
+                str(task.project_id),
+                "images",
+            )
+            os.makedirs(project_dir, exist_ok=True)
+
+            file_name = f"{_uuid.uuid4()}.png"
+            storage_path = os.path.join(project_dir, file_name)
+
+            with open(storage_path, "wb") as f:
+                f.write(image_bytes)
+
+            logger.info("Saved image to %s (%d bytes)", storage_path, len(image_bytes))
+
+            # Create Asset record
+            asset_repo = AssetRepository(session)
+            asset = await asset_repo.create({
+                "project_id": task.project_id,
+                "file_name": file_name,
+                "file_type": "image/png",
+                "storage_path": storage_path,
+                "file_size_bytes": len(image_bytes),
+                "asset_category": "generated_image",
+                "source_task_id": task.id,
+                "metadata_": job_status.metadata.get("data", {}),
+            })
+            asset_id = asset.id
+
+        # Update shot image_status if shot_id is set
+        if task.shot_id:
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.image_status = "completed"
+                if asset_id:
+                    shot.selected_image_id = asset_id
+                await session.flush()
+
+        # Mark task completed
+        task.status = "completed"
+        task.output_result = {
+            "asset_id": str(asset_id) if asset_id else None,
+            "storage_path": storage_path,
+            "jimeng_task_id": job_status.metadata.get("jimeng_task_id"),
+        }
+        task.progress = 1.0
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {
+            "status": "completed",
+            "asset_id": str(asset_id) if asset_id else None,
+        }
+
+    elif job_status.state == JobState.FAILED:
+        # Update shot image_status to failed if applicable
+        if task.shot_id:
+            from app.repositories.shot_repo import ShotRepository
+
+            shot_repo = ShotRepository(session)
+            shot = await shot_repo.get_by_id(task.shot_id)
+            if shot:
+                shot.image_status = "failed"
+                await session.flush()
+
+        task.status = "failed"
+        task.error_message = job_status.error or "Image generation failed"
+        task.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+        await session.commit()
+
+        return {"status": "failed", "error": task.error_message}
+
+    else:
         task.status = "running"
         task.progress = job_status.progress
         await session.flush()
