@@ -20,54 +20,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["tts"])
 
-# Hardcoded Chinese voices for MVP (used when no ElevenLabs API key is configured)
-_DEFAULT_VOICES: list[dict] = [
-    {
-        "voice_id": "pNInz6obpgDQGcFmaJgB",
-        "name": "Adam",
-        "labels": {"accent": "american", "gender": "male"},
-        "preview_url": None,
-    },
-    {
-        "voice_id": "EXAVITQu4vr4xnSDxMaL",
-        "name": "Bella",
-        "labels": {"accent": "american", "gender": "female"},
-        "preview_url": None,
-    },
-    {
-        "voice_id": "jBpfuIE2acCO8z3wKNLl",
-        "name": "Gigi",
-        "labels": {"accent": "american", "gender": "female", "use_case": "animation"},
-        "preview_url": None,
-    },
-    {
-        "voice_id": "onwK4e9ZLuTAKqWW03F9",
-        "name": "Daniel",
-        "labels": {"accent": "british", "gender": "male"},
-        "preview_url": None,
-    },
-    {
-        "voice_id": "XB0fDUnXU5powFXDhCwa",
-        "name": "Charlotte",
-        "labels": {"accent": "english-swedish", "gender": "female"},
-        "preview_url": None,
-    },
-]
-
-
 @router.get("/tts/voices", response_model=list[VoiceInfo])
 async def list_voices() -> list[VoiceInfo]:
-    """List available ElevenLabs voices.
+    """List available TTS voices (MiniMax or ElevenLabs based on config)."""
+    from app.ai.providers.minimax_tts import get_available_voices
 
-    Returns a hardcoded list of common voices if no API key is configured.
-    If API key is set, calls ElevenLabs API.
-    """
-    if settings.ELEVENLABS_API_KEY:
-        # TODO: Call ElevenLabs API when key is configured
-        # For now, fall through to default list
-        pass
-
-    return [VoiceInfo(**v) for v in _DEFAULT_VOICES]
+    voices = get_available_voices()
+    return [VoiceInfo(**v) for v in voices]
 
 
 @router.get(

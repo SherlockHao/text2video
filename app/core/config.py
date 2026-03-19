@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # TTS
     ELEVENLABS_API_KEY: str = ""
     ELEVENLABS_BASE_URL: str = "https://api.elevenlabs.io"
+    MINIMAX_API_KEY: str = ""
+    TTS_PROVIDER: str = "minimax_tts"  # "minimax_tts" or "elevenlabs"
 
     # OSS Storage
     OSS_ACCESS_KEY_ID: str = ""

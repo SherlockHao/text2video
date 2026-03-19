@@ -29,7 +29,9 @@ _ROUTING_TABLE: dict[tuple[str, Optional[str]], str] = {
     ("video_generation", "normal"): "kling",
     ("video_generation", "high"): "seedance2",
     ("video_generation", None): "kling",  # default
-    ("tts_generation", None): "elevenlabs",
+    ("tts_generation", None): "minimax_tts",  # default TTS provider
+    ("tts_generation", "elevenlabs"): "elevenlabs",
+    ("tts_generation", "minimax"): "minimax_tts",
 }
 
 

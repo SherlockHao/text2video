@@ -23,6 +23,7 @@ from app.core.config import settings
 import app.ai.providers.qwen  # noqa: F401
 import app.ai.providers.jimeng  # noqa: F401
 import app.ai.providers.elevenlabs  # noqa: F401
+import app.ai.providers.minimax_tts  # noqa: F401
 import app.ai.prompts.narration_manga  # noqa: F401
 
 logger = logging.getLogger(__name__)
