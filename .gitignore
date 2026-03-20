@@ -27,6 +27,9 @@ alembic/versions/*.pyc
 # Storage (runtime generated)
 storage/
 
+# E2E test outputs (large media files)
+e2e_output/
+
 # Docker runtime (volumes, not config)
 # Note: Dockerfile, docker-compose.yml, .dockerignore ARE tracked — they're project config
 

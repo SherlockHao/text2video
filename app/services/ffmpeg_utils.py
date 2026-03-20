@@ -168,6 +168,63 @@ def concatenate_clips(
             os.unlink(list_path)
 
 
+def overlay_bgm(
+    video_path: str,
+    bgm_path: str,
+    output_path: str,
+    bgm_volume: float = 0.15,
+) -> bool:
+    """
+    Overlay background music onto a video.
+
+    The BGM is looped to match video duration, mixed at reduced volume
+    under the existing audio track (TTS narration).
+
+    Args:
+        video_path: Input video with TTS audio.
+        bgm_path: Background music file.
+        output_path: Output video with mixed audio.
+        bgm_volume: BGM volume relative to original (0.0-1.0). Default 0.15.
+
+    Returns True on success.
+    """
+    video_duration = get_media_duration(video_path)
+    if video_duration <= 0:
+        logger.error("Cannot overlay BGM: video duration is 0")
+        return False
+
+    try:
+        # Use amix to blend original audio with looped BGM
+        # -stream_loop -1 loops the BGM, -t trims to video length
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-stream_loop", "-1", "-i", bgm_path,
+            "-filter_complex",
+            f"[1:a]volume={bgm_volume},afade=t=in:st=0:d=2,afade=t=out:st={video_duration-3}:d=3[bgm];"
+            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-t", str(video_duration),
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            logger.error("FFmpeg BGM overlay failed: %s", result.stderr[-500:])
+            return False
+
+        logger.info("BGM overlaid: %s (%.1fs, vol=%.0f%%)", output_path, video_duration, bgm_volume * 100)
+        return True
+
+    except Exception as e:
+        logger.error("FFmpeg BGM overlay error: %s", e)
+        return False
+
+
 def create_asset_package(
     files: dict[str, str],
     output_path: str,

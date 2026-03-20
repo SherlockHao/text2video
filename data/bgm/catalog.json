@@ -1,0 +1,23 @@
+{
+  "romantic_sweet": {
+    "file": "romantic_sweet.mp3",
+    "name": "浪漫甜宠",
+    "genres": ["豪门总裁", "青春甜宠", "宫斗宅斗"],
+    "mood": "romantic",
+    "note": "Placeholder - replace with real royalty-free BGM from pixabay.com/music/"
+  },
+  "suspense_mystery": {
+    "file": "suspense_mystery.mp3",
+    "name": "悬疑灵异",
+    "genres": ["悬疑灵异", "玄幻脑洞"],
+    "mood": "suspense",
+    "note": "Placeholder - replace with real royalty-free BGM"
+  },
+  "urban_modern": {
+    "file": "urban_modern.mp3",
+    "name": "都市日常",
+    "genres": ["都市日常", "都市脑洞", "都市修真"],
+    "mood": "modern",
+    "note": "Placeholder - replace with real royalty-free BGM"
+  }
+}
