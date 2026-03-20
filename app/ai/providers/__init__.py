@@ -26,9 +26,9 @@ def register_provider(name: str, cls: type[ExternalAIProvider]) -> None:
 _ROUTING_TABLE: dict[tuple[str, Optional[str]], str] = {
     ("script_breakdown", None): "qwen",
     ("image_generation", None): "jimeng",
-    ("video_generation", "normal"): "kling",
+    ("video_generation", "normal"): "seedance2",  # 即梦 as primary
     ("video_generation", "high"): "seedance2",
-    ("video_generation", None): "kling",  # default
+    ("video_generation", None): "seedance2",  # default to 即梦
     ("tts_generation", None): "minimax_tts",  # default TTS provider
     ("tts_generation", "elevenlabs"): "elevenlabs",
     ("tts_generation", "minimax"): "minimax_tts",

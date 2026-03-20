@@ -14,14 +14,16 @@ logger = logging.getLogger(__name__)
 # Predefined aspect-ratio -> (width, height) mapping.
 # Values are chosen to be compatible with Jimeng T2I v4.0 (multiples of 64,
 # reasonable total pixel count).
+# Verified working dimensions for Jimeng T2I v4.0
+# Must be multiples of 16, within [512, 1536] range
 _ASPECT_RATIO_MAP: dict[str, tuple[int, int]] = {
-    "16:9": (1280, 720),
-    "9:16": (720, 1280),
-    "4:3": (1152, 864),
-    "3:4": (864, 1152),
+    "16:9": (1472, 832),
+    "9:16": (832, 1472),
+    "4:3": (1024, 768),
+    "3:4": (768, 1024),
     "1:1": (1024, 1024),
-    "3:2": (1200, 800),
-    "2:3": (800, 1200),
+    "3:2": (1024, 672),
+    "2:3": (672, 1024),
 }
 
 

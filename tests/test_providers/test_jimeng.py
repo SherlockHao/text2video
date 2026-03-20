@@ -129,13 +129,13 @@ async def test_jimeng_poll_consumes_result():
 def test_calculate_dimensions_16_9():
     from app.ai.providers.jimeng_utils import calculate_dimensions
 
-    assert calculate_dimensions("16:9") == (1280, 720)
+    assert calculate_dimensions("16:9") == (1472, 832)
 
 
 def test_calculate_dimensions_9_16():
     from app.ai.providers.jimeng_utils import calculate_dimensions
 
-    assert calculate_dimensions("9:16") == (720, 1280)
+    assert calculate_dimensions("9:16") == (832, 1472)
 
 
 def test_calculate_dimensions_1_1():
@@ -147,13 +147,13 @@ def test_calculate_dimensions_1_1():
 def test_calculate_dimensions_4_3():
     from app.ai.providers.jimeng_utils import calculate_dimensions
 
-    assert calculate_dimensions("4:3") == (1152, 864)
+    assert calculate_dimensions("4:3") == (1024, 768)
 
 
 def test_calculate_dimensions_3_4():
     from app.ai.providers.jimeng_utils import calculate_dimensions
 
-    assert calculate_dimensions("3:4") == (864, 1152)
+    assert calculate_dimensions("3:4") == (768, 1024)
 
 
 def test_calculate_dimensions_unknown():
