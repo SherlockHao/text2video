@@ -20,8 +20,8 @@ def _calculate_shot_range(duration_target: int, quality_tier: str) -> tuple[int,
     """Calculate expected shot count range from duration and quality tier."""
     low_per_min, high_per_min = _SHOTS_PER_MINUTE.get(quality_tier, (8, 12))
     minutes = duration_target / 60.0
-    min_shots = max(1, math.floor(low_per_min * minutes))
-    max_shots = max(1, math.ceil(high_per_min * minutes))
+    min_shots = max(3, math.floor(low_per_min * minutes))  # at least 3 shots
+    max_shots = max(min_shots + 1, math.ceil(high_per_min * minutes))
     return min_shots, max_shots
 
 
@@ -64,7 +64,7 @@ def build_storyboard_prompt(
 - 情感节奏：注意叙事的起承转合，在关键情节处放慢节奏
 - 语言风格：口语化、有画面感、有代入感，适合配音朗读
 - 每段旁白（narration_text）必须是中文，用于TTS配音
-- **【严格限制】每段 narration_text 必须控制在15-20个汉字以内（不超过25个字）**，这是为了匹配视频时长。宁可精炼也不要啰嗦。每个分镜只说一句最关键的话。
+- **【严格限制】每段 narration_text 必须控制在14-18个汉字之间**，这是为了匹配5秒视频时长（中文语速约3.5字/秒）。宁可精炼也不要啰嗦。每个分镜只说一句最关键的话。
 
 ## 漫画视觉风格关键词
 所有 image_prompt 必须是英文，且必须包含以下风格关键词：
@@ -114,7 +114,7 @@ def build_storyboard_prompt(
 
 ## 关键要求
 1. image_prompt 是核心输出，必须是英文，必须详细专业，包含漫画风格关键词
-2. narration_text 必须是中文，**严格限制在15-20个汉字以内**，绝不超过25个字
+2. narration_text 必须是中文，**严格限制在14-18个汉字之间**
 3. 分镜数量必须在 {min_shots}-{max_shots} 个之间
 4. 所有分镜的 duration_seconds 之和应接近 {duration_target} 秒
 5. 镜头要有节奏变化：远近景交替、动静结合

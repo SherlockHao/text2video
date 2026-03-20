@@ -17,11 +17,15 @@ import requests
 
 from .service import call_api, create_service, poll_result
 
-# 3.0 Pro actions
-ACTIONS = ["JimengTI2VV30PROSubmitTask", "JimengTI2VV30PROGetResult"]
-REQ_KEY = "jimeng_ti2v_v30_pro"
+# 3.0 720P actions (primary — better quota availability)
+ACTIONS = ["JimengI2VFirstV30SubmitTask", "JimengI2VFirstV30GetResult"]
+REQ_KEY = "jimeng_i2v_first_v30"
 
-# Fallback: 3.0 非 Pro (备用)
+# 3.0 Pro 1080P (fallback)
+ACTIONS_PRO = ["JimengTI2VV30PROSubmitTask", "JimengTI2VV30PROGetResult"]
+REQ_KEY_PRO = "jimeng_ti2v_v30_pro"
+
+# 3.0 1080P (legacy, quota exhausted)
 ACTIONS_V30 = ["JimengI2VFirstV301080SubmitTask", "JimengI2VFirstV301080GetResult"]
 REQ_KEY_V30 = "jimeng_i2v_first_v30_1080"
 
