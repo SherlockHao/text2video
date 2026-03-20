@@ -194,34 +194,26 @@ def overlay_bgm(
         return False
 
     try:
-        # Use amix to blend original audio with looped BGM
-        # -stream_loop -1 loops the BGM, -t trims to video length
-        # Use amerge + pan for reliable mixing (amix has volume normalization issues)
         fade_out_start = max(0, video_duration - 2)
-        tts_weight = 1.0 - bgm_volume
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-stream_loop", "-1", "-i", bgm_path,
+            "-i", bgm_path,
             "-filter_complex",
-            f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=mono[tts];"
-            f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=mono,"
-            f"volume={bgm_volume},"
-            f"afade=t=in:st=0:d=1.5,"
-            f"afade=t=out:st={fade_out_start:.1f}:d=2,"
-            f"atrim=0:{video_duration:.1f}[bgm];"
-            f"[tts][bgm]amerge=inputs=2,"
-            f"pan=mono|c0={tts_weight:.2f}*c0+{bgm_volume:.2f}*c1[aout]",
+            f"[1:a]volume={bgm_volume},"
+            f"afade=t=in:d=2,afade=t=out:st={fade_out_start:.1f}:d=2[bgmvol];"
+            f"[0:a][bgmvol]amix=inputs=2:duration=shortest[out]",
             "-map", "0:v",
-            "-map", "[aout]",
-            "-t", str(video_duration),
+            "-map", "[out]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
+            "-t", str(video_duration),
             "-movflags", "+faststart",
             output_path,
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
         if result.returncode != 0:
             logger.error("FFmpeg BGM overlay failed: %s", result.stderr[-500:])
             return False

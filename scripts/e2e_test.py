@@ -72,13 +72,26 @@ for sc in scenes:
             if saved: scene_images[sid] = saved[0]; log(f"  {sid}: ✓")
     time.sleep(3)
 
-# ============ STEP 2: Shot images ============
-log(f"\n[Step 2] Shot images...")
+# Build scene description lookup
+scene_desc_map = {}
+for sc in scenes:
+    scene_desc_map[sc["scene_id"]] = sc.get("description_en", "")
+
+# ============ STEP 2: Shot images (with scene context) ============
+log(f"\n[Step 2] Shot images (with scene context)...")
 shot_images = {}
 for s in shots:
     sn = s["shot_number"]
     prompt = s.get("image_prompt", "")
     if not prompt: continue
+
+    # Inject scene background description into prompt for location consistency
+    scene_id = s.get("scene_id", "")
+    scene_desc = scene_desc_map.get(scene_id, "")
+    if scene_desc and scene_desc.lower()[:20] not in prompt.lower():
+        prompt = f"{prompt}, background: {scene_desc}"
+
+    log(f"  Shot {sn} (scene={scene_id}): {prompt[:80]}...")
     tid = submit_t2i_task(prompt, width=832, height=1472)
     if tid:
         r = get_t2i_result(tid, max_wait=120)
@@ -154,7 +167,7 @@ log(f"  Concat: {get_media_duration(concat):.1f}s")
 
 final = os.path.abspath(f"{OUTPUT}/final_video.mp4")
 bgm = os.path.abspath("data/bgm/romantic_sweet.mp3")
-overlay_bgm(concat, bgm, final, bgm_volume=0.20)
+overlay_bgm(concat, bgm, final, bgm_volume=0.25)
 dur = get_media_duration(final)
 size = os.path.getsize(final) / 1024 / 1024
 log(f"  Final: {dur:.1f}s, {size:.1f}MB")
