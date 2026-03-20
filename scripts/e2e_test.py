@@ -123,10 +123,17 @@ for s in shots:
         first_frame = shot_images[sn]
         log(f"  Shot {sn}: using generated image (new scene={scene_id})")
 
-    motion = build_video_motion_prompt(
-        s.get("scene_description", ""), s.get("camera_movement", "static"), "manga"
-    )
-    tid = submit_i2v_task(first_frame, prompt=motion, frames=FRAMES)
+    # Use LLM-generated video_prompt (action-specific) instead of template
+    video_prompt = s.get("video_prompt", "")
+    if not video_prompt:
+        # Fallback to template if LLM didn't provide video_prompt
+        from app.ai.prompts.video_motion import build_video_motion_prompt
+        video_prompt = build_video_motion_prompt(
+            s.get("scene_description", ""), s.get("camera_movement", "static"), "manga"
+        )
+    log(f"    prompt: {video_prompt[:80]}...")
+
+    tid = submit_i2v_task(first_frame, prompt=video_prompt, frames=FRAMES)
     if tid:
         r = get_i2v_result(tid, max_wait=600)
         if r:
@@ -142,9 +149,19 @@ for s in shots:
                 else:
                     prev_last_frame = None
                     log(f"  Shot {sn}: ✓ (last frame extraction failed)")
+                # Extract mid frame for visual review
+                mid_path = f"{OUTPUT}/frames/shot_{sn:02d}_midframe.png"
+                subprocess.run(
+                    ["ffmpeg", "-y", "-ss", "2.5", "-i", saved[0], "-frames:v", "1", mid_path],
+                    capture_output=True, timeout=10,
+                )
     time.sleep(8)
 
 log(f"  {len(shot_videos)}/{len(shots)} videos")
+
+# Visual review: save all review frames for manual inspection
+log(f"\n[Step 3b] Visual review frames saved to {OUTPUT}/frames/")
+log(f"  Check shot_XX_midframe.png files to verify video content matches story.")
 
 # ============ STEP 4: TTS ============
 log(f"\n[Step 4] TTS ({VOICE_ID})...")

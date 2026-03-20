@@ -110,8 +110,9 @@ def build_storyboard_prompt(
       "shot_number": 1,
       "duration_seconds": {avg_shot_duration},
       "scene_id": "scene_1",
-      "image_prompt": "English prompt for manga-style image generation. Must include character appearance details, scene description, camera angle, lighting, and manga style keywords. Example: 'anime style, manga style, cel shading, vibrant colors, masterpiece, best quality, a young woman with long black hair and blue eyes wearing a red kimono, standing in a moonlit bamboo forest, medium shot, dramatic side lighting, ethereal atmosphere'",
-      "narration_text": "中文旁白文本（14-18字），用于TTS配音。",
+      "image_prompt": "English prompt for manga-style IMAGE generation. Describes the static frame: character appearance, pose, scene, lighting. Must include full character appearance details.",
+      "video_prompt": "English prompt for VIDEO generation (image-to-video). Describes what HAPPENS in this shot: specific character ACTIONS (standing up, walking, grabbing, leaning), character INTERACTIONS (walking towards someone, whispering in ear), facial EXPRESSIONS (tears forming, smirking), object INTERACTIONS (clutching folder, pushing door open), and camera MOVEMENT. Be very specific about WHO does WHAT. Example: 'a young woman with long black hair clutches a folder tightly, takes a deep breath, and pushes open a large wooden door, camera slowly zooms in on her trembling hand'",
+      "narration_text": "中文旁白文本（25-35字），用于TTS配音。",
       "scene_description": "场景环境描述（中文）",
       "camera_movement": "镜头运动：static/pan left/pan right/zoom in/zoom out/tilt up/tilt down/tracking",
       "transition": "转场方式：cut/fade/dissolve/wipe"
@@ -121,13 +122,14 @@ def build_storyboard_prompt(
 ```
 
 ## 关键要求
-1. image_prompt 是核心输出，必须是英文，必须详细专业，包含漫画风格关键词
-2. narration_text 必须是中文，**严格限制在25-35个汉字之间**
-3. 分镜数量必须在 {min_shots}-{max_shots} 个之间
-4. 所有分镜的 duration_seconds 之和应接近 {duration_target} 秒
-5. 镜头要有节奏变化：远近景交替、动静结合
-6. **每个画面必须包含人物（至少上半身），禁止纯特写**
-7. 只输出JSON，不要输出其他内容"""
+1. image_prompt 描述静态画面（人物外貌+姿态+场景），必须英文，含漫画风格关键词
+2. **video_prompt 描述动态动作（极其重要）**：必须英文，必须具体描述这一镜中人物做了什么动作、与谁互动、表情如何变化、镜头如何运动。不要写笼统的"subtle animation"，要写具体的动作如"man stands up from chair and walks towards the woman"
+3. narration_text 必须是中文，**严格限制在25-35个汉字之间**
+4. 分镜数量必须在 {min_shots}-{max_shots} 个之间
+5. 所有分镜的 duration_seconds 之和应接近 {duration_target} 秒
+6. 镜头要有节奏变化：远近景交替、动静结合
+7. **每个画面必须包含人物（至少上半身），禁止纯特写**
+8. 只输出JSON，不要输出其他内容"""
 
     user_prompt = f"""请将以下文本拆解为漫画风格的解说类短视频分镜。
 
