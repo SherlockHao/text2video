@@ -98,12 +98,20 @@ def build_storyboard_prompt(
       "appearance_en": "Detailed appearance description in English for image prompts"
     }}}}
   ],
+  "scene_backgrounds": [
+    {{{{
+      "scene_id": "scene_1",
+      "name": "场景名称（如：豪华大厅）",
+      "description_en": "Detailed English description of the background scene WITHOUT any characters. Include architectural details, lighting, atmosphere, color palette. Example: 'luxurious marble hall with grand chandeliers, polished white marble floor with blue reflections, golden pillars, cool dramatic lighting, manga style background'"
+    }}}}
+  ],
   "storyboards": [
     {{{{
       "shot_number": 1,
       "duration_seconds": {avg_shot_duration},
+      "scene_id": "scene_1",
       "image_prompt": "English prompt for manga-style image generation. Must include character appearance details, scene description, camera angle, lighting, and manga style keywords. Example: 'anime style, manga style, cel shading, vibrant colors, masterpiece, best quality, a young woman with long black hair and blue eyes wearing a red kimono, standing in a moonlit bamboo forest, medium shot, dramatic side lighting, ethereal atmosphere'",
-      "narration_text": "中文旁白文本，用于TTS配音。要有画面感和代入感。",
+      "narration_text": "中文旁白文本（14-18字），用于TTS配音。",
       "scene_description": "场景环境描述（中文）",
       "camera_movement": "镜头运动：static/pan left/pan right/zoom in/zoom out/tilt up/tilt down/tracking",
       "transition": "转场方式：cut/fade/dissolve/wipe"
