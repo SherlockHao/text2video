@@ -135,8 +135,9 @@ def concatenate_clips(
     try:
         with open(list_path, "w") as f:
             for clip in clip_paths:
-                # Escape single quotes in path
-                escaped = clip.replace("'", "'\\''")
+                # Use absolute paths for concat demuxer reliability
+                abs_clip = os.path.abspath(clip)
+                escaped = abs_clip.replace("'", "'\\''")
                 f.write(f"file '{escaped}'\n")
 
         cmd = [
