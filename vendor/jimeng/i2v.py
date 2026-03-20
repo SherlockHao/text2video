@@ -1,10 +1,12 @@
 """
-即梦AI - 视频生成 3.0 1080P (图生视频_首帧)
-API Explorer: https://api.volcengine.com/api-docs/view?serviceCode=cv&version=2024-06-06&action=JimengI2VFirstV301080SubmitTask
+即梦AI - 视频生成 3.0 Pro 1080P (图生视频)
+API Explorer: https://api.volcengine.com/api-docs/view?serviceCode=cv&version=2024-06-06&action=JimengTI2VV30PROSubmitTask
 
 异步调用流程:
-1. JimengI2VFirstV301080SubmitTask 提交任务 → 获取 task_id
-2. JimengI2VFirstV301080GetResult  轮询结果 → 获取生成的视频
+1. JimengTI2VV30PROSubmitTask 提交任务 → 获取 task_id
+2. JimengTI2VV30PROGetResult  轮询结果 → 获取生成的视频
+
+注: 3.0 非 Pro 版本 (JimengI2VFirstV301080) 免费额度已耗尽，切换到 3.0 Pro
 """
 
 import base64
@@ -15,7 +17,13 @@ import requests
 
 from .service import call_api, create_service, poll_result
 
-ACTIONS = ["JimengI2VFirstV301080SubmitTask", "JimengI2VFirstV301080GetResult"]
+# 3.0 Pro actions
+ACTIONS = ["JimengTI2VV30PROSubmitTask", "JimengTI2VV30PROGetResult"]
+REQ_KEY = "jimeng_ti2v_v30_pro"
+
+# Fallback: 3.0 非 Pro (备用)
+ACTIONS_V30 = ["JimengI2VFirstV301080SubmitTask", "JimengI2VFirstV301080GetResult"]
+REQ_KEY_V30 = "jimeng_i2v_first_v30_1080"
 
 
 def submit_i2v_task(
@@ -23,32 +31,41 @@ def submit_i2v_task(
     prompt: str = "",
     seed: int = -1,
     frames: int = 121,
+    use_pro: bool = True,
 ) -> str | None:
     """提交图生视频任务，返回 task_id"""
-    vs = create_service(ACTIONS)
+    actions = ACTIONS if use_pro else ACTIONS_V30
+    req_key = REQ_KEY if use_pro else REQ_KEY_V30
+
+    vs = create_service(actions)
 
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode()
 
     form = {
-        "req_key": "jimeng_i2v_first_v30_1080",
+        "req_key": req_key,
         "binary_data_base64": [img_b64],
         "prompt": prompt,
         "seed": seed,
         "frames": frames,
     }
 
-    print(f"提交图生视频任务...")
+    model_name = "3.0 Pro" if use_pro else "3.0"
+    print(f"提交图生视频任务 ({model_name})...")
     print(f"  首帧图片: {image_path}")
     print(f"  prompt: {prompt or '(无)'}")
     print(f"  帧数: {frames} (~{frames / 24:.1f}s @24fps)")
 
-    result = call_api(vs, "JimengI2VFirstV301080SubmitTask", form)
+    result = call_api(vs, actions[0], form)
     code = result.get("code", -1)
     print(f"  code={code}, message={result.get('message', '')}")
 
     if code != 10000:
         print(f"  错误: {json.dumps(result, ensure_ascii=False, indent=2)[:500]}")
+        # If Pro fails, try fallback to non-Pro
+        if use_pro:
+            print("  尝试回退到 3.0 非Pro...")
+            return submit_i2v_task(image_path, prompt, seed, frames, use_pro=False)
         return None
 
     task_id = result.get("data", {}).get("task_id")
@@ -56,11 +73,20 @@ def submit_i2v_task(
     return task_id
 
 
-def get_i2v_result(task_id: str, max_wait: int = 600) -> dict | None:
-    """轮询获取视频生成结果（1080P较慢，默认等待10分钟）"""
-    vs = create_service(ACTIONS)
-    form = {"req_key": "jimeng_i2v_first_v30_1080", "task_id": task_id}
-    return poll_result(vs, "JimengI2VFirstV301080GetResult", form, max_wait=max_wait)
+def get_i2v_result(task_id: str, max_wait: int = 600, use_pro: bool = True) -> dict | None:
+    """轮询获取视频生成结果"""
+    actions = ACTIONS if use_pro else ACTIONS_V30
+    req_key = REQ_KEY if use_pro else REQ_KEY_V30
+
+    vs = create_service(actions)
+    form = {"req_key": req_key, "task_id": task_id}
+
+    def check_done(data):
+        has_video = bool(data.get("video_url", ""))
+        has_binary = any(b for b in data.get("binary_data_base64", []) if b)
+        return has_video or has_binary or data.get("status") == "done"
+
+    return poll_result(vs, actions[1], form, max_wait=max_wait, check_done=check_done)
 
 
 def save_video(data: dict, output_dir: str = ".", prefix: str = "jimeng_video") -> list[str]:
