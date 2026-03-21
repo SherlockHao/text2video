@@ -45,3 +45,7 @@ vendor/**/__pycache__/
 .DS_Store
 Thumbs.db
 temp/
+
+# Screenshots and compressed images
+kling.png
+kling_compressed.jpg
