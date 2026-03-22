@@ -1,332 +1,311 @@
-# Server-Side Architecture Design
+# 服务端架构文档
 
 > Project: AI Text-to-Video Marketing Production Tool
-> Version: v1.0 MVP (Phase 1: Narration × Manga)
-> Date: 2026-03-19
+> Version: v2.0 (Workflow Template Engine)
+> Updated: 2026-03-22
 
-## 1. System Overview
-
-### 1.1 Core Pipeline
+## 1. 整体架构
 
 ```
-脚本输入 → 敏感词检测 → LLM剧本拆解 → 角色/分镜生图(抽卡) → 视频生成 → TTS配音 → FFmpeg组装 → MP4+ZIP导出
+┌─────────────────────────────────────────────────────────────┐
+│  入口层                                                      │
+│  scripts/e2e_v11b.py (CLI)     app/api/v1/workflows.py (API) │
+└──────────────┬─────────────────────────┬────────────────────┘
+               │                         │
+               ▼                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  工作流引擎 (app/workflows/)                                  │
+│                                                              │
+│  registry.py ─── get_workflow("narration_manga")             │
+│       ↓                                                      │
+│  base.py ─── BaseWorkflow + WorkflowContext                  │
+│       ↓                                                      │
+│  templates/                                                  │
+│    ├── narration_manga.py   (旁白漫剧, 9 Stages)             │
+│    └── ...                  (未来模板)                        │
+└──────────────┬───────────────────────────────────────────────┘
+               │ 各 Stage 按需调用
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  能力层（所有模板共享）                                        │
+│                                                              │
+│  ┌───────────────┐  ┌───────────────┐  ┌─────────────────┐  │
+│  │ AI Providers   │  │ AI Tools      │  │ Services        │  │
+│  │               │  │               │  │                 │  │
+│  │ vendor/qwen/  │  │ duration_     │  │ ffmpeg_utils    │  │
+│  │ vendor/jimeng/│  │ planner.py    │  │ narration_utils │  │
+│  │ vendor/kling/ │  │               │  │ storage/        │  │
+│  │ vendor/sora2/ │  │               │  │                 │  │
+│  │ minimax_tts   │  │               │  │                 │  │
+│  └───────────────┘  └───────────────┘  └─────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 Tech Stack
-
-| Layer | Choice |
-|-------|--------|
-| Language | Python 3.11+ |
-| Web Framework | FastAPI (async) |
-| Database | PostgreSQL 15 (JSONB for storyboard data) |
-| Task Queue | Redis 7 + arq |
-| Object Storage | Alibaba Cloud OSS (local filesystem for dev) |
-| Container | Docker + docker-compose |
-| Video Processing | FFmpeg (via ffmpeg-python) |
-
-### 1.3 External AI APIs
-
-| Provider | API | Purpose |
-|----------|-----|---------|
-| Qwen 3.5-Plus | Alibaba Cloud DashScope | LLM script breakdown (primary) |
-| Jimeng (即梦) | Volcengine | Manga-style image generation |
-| Kling (可灵) | Kuaishou | Video generation (normal quality) |
-| Seedance2 (即梦) | Volcengine | Video generation (high quality) |
-| ElevenLabs | ElevenLabs | TTS voiceover |
-
-## 2. Data Model
-
-### 2.1 Entity Relationship
+## 2. 目录结构
 
 ```
-User 1---* Project
-Project 1---* Storyboard (versioned script breakdowns)
-Storyboard 1---* Shot (individual storyboard frames)
-Shot *---* Character (character references used in shot)
-Character 1---* CharacterImage (gacha candidates)
-Project 1---1 TTSConfig (voice settings)
-Project 1---* AITask (hierarchical task tree via parent_task_id)
-AITask ---* Asset (generated artifacts)
+text2video/
+├── scripts/
+│   └── e2e_v11b.py              # CLI 运行器（thin runner，调用 workflow 引擎）
+│
+├── app/
+│   ├── workflows/               # 工作流引擎
+│   │   ├── base.py              # BaseWorkflow 基类 + WorkflowContext 上下文
+│   │   ├── registry.py          # 模板注册表（@register_workflow 装饰器）
+│   │   └── templates/
+│   │       └── narration_manga.py  # 旁白漫剧模板（9 Stages）
+│   │
+│   ├── ai/
+│   │   ├── pipeline.py          # DAG 编排器（服务端异步任务用）
+│   │   ├── duration_planner.py  # TTS 驱动时长规划器（4 Cases）
+│   │   ├── prompts/             # Prompt 模板
+│   │   ├── providers/           # AI 服务封装（minimax_tts, kling, jimeng 等）
+│   │   └── worker.py            # arq 异步任务 worker
+│   │
+│   ├── api/v1/                  # REST API
+│   │   ├── workflows.py         # 工作流 API（列表、执行）
+│   │   ├── projects.py          # 项目管理
+│   │   ├── storyboards.py       # 分镜管理
+│   │   ├── shots.py             # 镜头管理
+│   │   ├── tts.py               # TTS
+│   │   ├── videos.py            # 视频生成
+│   │   └── assembly.py          # 组装
+│   │
+│   ├── services/                # 通用业务服务
+│   │   ├── ffmpeg_utils.py      # FFmpeg 工具（对齐、拼接、字幕、BGM）
+│   │   ├── narration_utils.py   # 旁白工具（TTS 时长估算、LLM 压缩）
+│   │   └── ...
+│   │
+│   ├── models/                  # SQLAlchemy 数据模型
+│   ├── repositories/            # 数据库 CRUD
+│   ├── storage/                 # 文件存储（本地 / OSS）
+│   └── main.py                  # FastAPI 入口
+│
+├── vendor/                      # 外部 AI 服务客户端
+│   ├── qwen/                    # 阿里云 Qwen 3.5-Plus（LLM）
+│   ├── jimeng/                  # 字节即梦（文生图 T2I）
+│   ├── kling/                   # 快手可灵（图生视频 I2V）
+│   └── sora2/                   # OpenAI Sora 2（备选视频生成）
+│
+├── data/
+│   ├── test_novel.txt           # 测试小说文本
+│   └── bgm/                    # 背景音乐库
+│
+├── docs/                        # 文档
+│   ├── architecture.md          # 本文档
+│   └── development-plan.md      # 开发计划
+│
+├── Dockerfile
+├── docker-compose.yml
+└── pyproject.toml
 ```
 
-### 2.2 New Models
+## 3. 各层职责
 
-#### Storyboard
-- `id` UUID PK
-- `project_id` UUID FK → projects
-- `version` INT (allows re-breakdown)
-- `scene_count` INT
-- `shots_per_minute` FLOAT (derived from quality_tier)
-- `raw_llm_response` JSONB (full LLM output for debug)
-- `status` VARCHAR (pending/completed/failed)
+### 3.1 入口层
 
-#### Shot (core unit of work)
-- `id` UUID PK
-- `storyboard_id` UUID FK → storyboards
-- `sequence_number` INT (1-based ordering)
-- `scene_number` INT
-- `image_prompt` TEXT (LLM-generated prompt for image gen)
-- `narration_text` TEXT (voiceover text)
-- `scene_description` TEXT
-- `character_ids` JSONB (array of character UUIDs)
-- `selected_image_id` UUID FK → assets (user-picked from gacha)
-- `generated_video_id` UUID FK → assets
-- `tts_audio_id` UUID FK → assets
-- `image_status` VARCHAR (pending/generating/selection/completed/failed)
-- `video_status` VARCHAR
-- `tts_status` VARCHAR
-- `duration_seconds` FLOAT (computed from TTS audio length)
+| 入口 | 用途 | 调用方式 |
+|---|---|---|
+| `scripts/e2e_v11b.py` | 命令行端到端运行 | `python scripts/e2e_v11b.py --workflow narration_manga --output e2e_output/v13` |
+| `app/api/v1/workflows.py` | REST API，供 Web UI 调用 | `POST /api/v1/workflows/run` |
 
-#### Character (global shared library)
-- `id` UUID PK
-- `user_id` UUID FK → users (owner, NOT project-scoped)
-- `name` VARCHAR
-- `description` TEXT
-- `tags` JSONB (array: genre, gender, style for search)
-- `visual_style` VARCHAR (e.g., "manga")
-- `reference_image_id` UUID FK → assets (chosen canonical image)
-- `seed_value` INT (for image gen reproducibility)
+### 3.2 工作流引擎层
 
-#### CharacterImage (gacha candidates)
-- `id` UUID PK
-- `character_id` UUID FK → characters
-- `asset_id` UUID FK → assets
-- `generation_seed` INT
-- `generation_params` JSONB
-- `is_selected` BOOLEAN
-- `attempt_number` INT (1-3)
+| 模块 | 职责 |
+|---|---|
+| `base.py` | 定义 `BaseWorkflow`（Stage 执行框架）和 `WorkflowContext`（Stage 间数据传递） |
+| `registry.py` | `@register_workflow` 装饰器 + `get_workflow(name)` 查找 + `list_workflows()` 列表 |
+| `templates/*.py` | 具体模板实现，每个模板定义自己的 Stage 序列和每个 Stage 的逻辑 |
 
-#### TTSConfig
-- `id` UUID PK
-- `project_id` UUID FK → projects (unique)
-- `voice_id` VARCHAR (ElevenLabs voice identifier)
-- `speed` FLOAT (default 1.0)
-- `stability` FLOAT (default 0.5)
-- `similarity_boost` FLOAT (default 0.75)
-- `language` VARCHAR (default "zh")
+**核心设计**: 模板决定"做什么、什么顺序"，能力层提供"怎么做"。
 
-#### SensitiveWordHit (audit log)
-- `id` UUID PK
-- `project_id` UUID FK → projects
-- `text_segment` TEXT
-- `matched_keywords` JSONB
-- `action_taken` VARCHAR (blocked/warned)
+### 3.3 能力层
 
-### 2.3 Modified Models
+| 模块 | 能力 | 被哪些模板使用 |
+|---|---|---|
+| `vendor/qwen/` | LLM（分镜、旁白压缩、单镜头重生成） | 所有需要 LLM 的模板 |
+| `vendor/jimeng/` | 文生图 T2I（角色参考、场景、首帧） | narration_manga |
+| `vendor/kling/` | 图生视频 I2V（Kling V3, subject_reference） | narration_manga |
+| `vendor/sora2/` | 文生视频（Sora 2, 备选） | 可在任何模板中替换 Kling |
+| `minimax_tts` | TTS 语音合成（情感标签） | 所有需要旁白的模板 |
+| `duration_planner.py` | TTS 驱动子镜头时长规划 | narration_manga |
+| `ffmpeg_utils.py` | 视频对齐、拼接、字幕烧录、BGM 叠加 | 所有需要组装的模板 |
 
-#### Project (add columns)
-- `content_type` VARCHAR (default "narration") — narration/dialogue/promotion
-- `visual_style` VARCHAR (default "manga") — manga/realistic/pet/digital_human
-- `aspect_ratio` VARCHAR — "16:9" or "9:16"
-- `duration_target` INT — 60 or 120 seconds
-- `quality_tier` VARCHAR — "normal" or "high"
-- `source_text` TEXT — raw novel input (up to 50K chars)
-- `current_step` VARCHAR — pipeline checkpoint: draft/script_breakdown/visual_design/video_gen/tts/assembly/completed
+## 4. 旁白漫剧模板（narration_manga）
 
-#### AITask (add columns)
-- `parent_task_id` UUID FK → ai_tasks (hierarchical tasks)
-- `shot_id` UUID FK → shots (link task to specific shot)
-- `step_name` VARCHAR (human-readable: "script_breakdown", "image_gen_shot_3")
-- `retry_count` INT (default 0)
-- `max_retries` INT (default 3)
-- `provider_name` VARCHAR (qwen/jimeng/kling/seedance2/elevenlabs)
-- `external_job_id` VARCHAR (job ID from external API for polling)
-- `checkpoint_data` JSONB (arbitrary state for resume)
-- `priority` INT (default 0)
+### 4.1 九阶段流程
 
-#### Asset (add columns)
-- `asset_category` VARCHAR — character_ref/shot_image_candidate/shot_image_selected/shot_video/tts_audio/final_video/asset_package
-- `source_task_id` UUID FK → ai_tasks
-- `oss_url` VARCHAR (CDN/OSS public URL)
-- `project_id` — change to NULLABLE (character assets are project-independent)
+```
+输入: 小说文本 + 参数(duration, voice)
+  │
+  ▼
+Stage 1: storyboard ─── Qwen LLM → 分镜脚本
+  │                      输出: segments(含 sub_shots) + characters + scenes
+  ▼
+Stage 2: tts ────────── MiniMax TTS → 每段旁白音频
+  │                      输出: 真实 TTS 时长（秒）
+  ▼
+Stage 3: duration_plan ─ TTS 时长驱动子镜头时长规划
+  │                      Case 1: TTS+1s >= 子镜头总时长 → 不调整
+  │                      Case 2: TTS+1s < 总时长 → 等比例缩短(min 3s)
+  │                      Case 3: 缩短触及3s下限 → 钉死3s, 缩短其他
+  │                      Case 4: 全部3s仍超出 → LLM 重新生成单镜头
+  ▼
+Stage 4: char_refs ──── Jimeng T2I → 每角色一张参考图(832×1472)
+  │
+  ▼
+Stage 5: scene_bgs ──── Jimeng T2I → 每场景一张背景图(仅审查用)
+  │
+  ▼
+Stage 6: first_frames ─ Jimeng T2I + 末尾帧提取
+  │                      场景首段第一个子镜头 → T2I 生成
+  │                      其他子镜头 → 上一个子镜头视频的末尾帧
+  ▼
+Stage 7: video_gen ──── Kling V3 I2V → 每个子镜头视频(动态时长 3-15s)
+  │                      输入: 首帧图 + 角色参考图(subject_reference) + motion prompt
+  ▼
+Stage 8: assembly ───── FFmpeg
+  │                      8a: 子镜头拼接 → 段视频
+  │                      8b: 段视频 + TTS 对齐
+  │                      8c: 所有段拼接
+  │                      8d: 字幕烧录
+  │                      8e: BGM 叠加
+  ▼
+Stage 9: quality_gate ─ 检查: 总时长、BGM、视频完整性、场景连续性
+  │
+  ▼
+输出: final_video.mp4
+```
 
-### 2.4 Enums
+### 4.2 数据流（WorkflowContext）
+
+```
+storyboard   → ctx.segments, ctx.characters, ctx.scenes
+tts          → ctx.tts_paths, ctx.tts_durations
+duration_plan → ctx.seg_durations, ctx.all_sub_shots, ctx.all_durations
+char_refs    → ctx.char_images
+scene_bgs    → ctx.scene_images
+first_frames → ctx.sub_shot_plan, ctx.t2i_images
+video_gen    → ctx.sub_shot_videos, ctx.total_generated
+assembly     → ctx.final_video_path, ctx.final_duration, ctx.final_size_mb
+quality_gate → ctx.quality_passed, ctx.quality_issues
+```
+
+### 4.3 TTS 驱动时长规划（duration_planner.py）
+
+解决的问题：之前用估算 TTS 时长决定视频时长，实际 TTS 比估算短 2-4s，造成视频浪费。
+
+现在 TTS 先生成，用真实时长反推：
+
+```
+target = real_tts_duration + 1.0s（前后各 0.5s 缓冲）
+
+Case 1: target >= N×5s     → 保持原时长（极少出现）
+Case 2: target < N×5s      → 等比例缩短，每个子镜头 >= 3s
+Case 3: 等比例缩短后有 < 3s → 钉死 3s，缩短其余
+Case 4: 全部 3s 仍 > target → 重新生成为单镜头，时长 = target
+```
+
+节省约 30% 视频生成量。
+
+## 5. 外部服务
+
+| 服务 | 提供商 | 用途 | 配置位置 |
+|---|---|---|---|
+| LLM | 阿里云 Qwen 3.5-Plus | 分镜生成、旁白压缩 | `vendor/qwen/config.py` |
+| T2I | 字节即梦 | 角色图、场景图、首帧图 | `vendor/jimeng/config.py` |
+| I2V（主力） | 快手 Kling V3 | 图生视频，支持 subject_reference | `vendor/kling/config.py` |
+| I2V（备选） | OpenAI Sora 2 | 图生视频，支持 4/8/12s | `vendor/sora2/config.py` |
+| TTS | MiniMax | 情感旁白语音合成 | `app/ai/providers/minimax_tts.py` |
+| 视频处理 | FFmpeg（本地） | 对齐、拼接、字幕、BGM | 无需配置 |
+
+> 注意: 所有 `vendor/*/config.py` 包含 API Key，已在 `.gitignore` 中排除。
+
+## 6. 如何增加新模板
+
+以"口播解说短视频"为例，只需 3 步：
+
+### Step 1: 创建模板文件
 
 ```python
-ContentType: narration, dialogue, promotion
-VisualStyle: manga, realistic, pet, digital_human
-AspectRatio: "16:9", "9:16"
-QualityTier: normal, high
-ProjectStep: draft, script_breakdown, visual_design, video_gen, tts, assembly, completed
-TaskType: script_breakdown, image_generation, video_generation, tts_generation, assembly, sensitive_word_check
-TaskStatus: pending, queued, running, completed, failed, cancelled
-ShotStatus: pending, generating, selection, completed, failed
-AssetCategory: character_ref, shot_image_candidate, shot_image_selected, shot_video, tts_audio, final_video, asset_package
+# app/workflows/templates/talking_head.py
+
+from app.workflows.base import BaseWorkflow, WorkflowContext, StageResult
+from app.workflows.registry import register_workflow
+
+@register_workflow
+class TalkingHeadWorkflow(BaseWorkflow):
+    name = "talking_head"
+    display_name = "口播解说"
+    stages = [
+        "script",        # LLM 生成解说稿
+        "avatar_gen",    # 数字人形象生成
+        "tts",           # TTS 语音合成
+        "lipsync",       # 口型同步视频
+        "assembly",      # 组装
+    ]
+
+    def stage_script(self, ctx: WorkflowContext) -> StageResult:
+        # 调用 vendor/qwen，用不同的 Prompt 生成解说稿
+        ...
+        return StageResult(success=True)
+
+    def stage_avatar_gen(self, ctx: WorkflowContext) -> StageResult:
+        ...
+        return StageResult(success=True)
+
+    def stage_tts(self, ctx: WorkflowContext) -> StageResult:
+        # 复用 minimax_tts
+        ...
+        return StageResult(success=True)
+
+    def stage_lipsync(self, ctx: WorkflowContext) -> StageResult:
+        ...
+        return StageResult(success=True)
+
+    def stage_assembly(self, ctx: WorkflowContext) -> StageResult:
+        # 复用 ffmpeg_utils
+        ...
+        return StageResult(success=True)
 ```
 
-## 3. Pipeline Orchestration
-
-### 3.1 Task Hierarchy
-
-```
-Project Pipeline (root)
-  ├── ScriptBreakdown (1 task, sync-ish)
-  │     └── Creates: Storyboard + N Shots
-  ├── ImageGeneration (N tasks, parallel, one per shot)
-  │     └── User confirms selection (pipeline pauses here)
-  ├── TTSGeneration (N tasks, parallel, one per shot)
-  │     └── Can start after storyboard, parallel with image gen
-  ├── VideoGeneration (N tasks, parallel, one per shot)
-  │     └── Depends on: selected image for each shot
-  └── Assembly (1 task)
-        └── Depends on: ALL video + ALL TTS completed
-```
-
-### 3.2 Checkpoint/Resume
-
-- Each Shot tracks independent status per phase (image_status, video_status, tts_status)
-- AITask.checkpoint_data stores external_job_id after submission — retry skips re-submission
-- Project.current_step is coarse checkpoint — resume identifies failed tasks in current step
-- If Shot 7/12 fails video gen, Shots 1-6 are already completed and won't re-run
-
-### 3.3 Quality Tier Routing
-
-```
-(video_generation, normal)  → Kling API
-(video_generation, high)    → Seedance2 API
-(image_generation, *)       → Jimeng API
-(tts_generation, *)         → ElevenLabs API
-(script_breakdown, *)       → Qwen 3.5-Plus API
-```
-
-### 3.4 Concurrency Control
-
-- Per-project: max 5 concurrent external API tasks (configurable)
-- Global: arq worker max_jobs setting
-- Per-provider: Redis-based semaphore for rate limiting
-
-## 4. API Endpoints
-
-All under `/api/v1`.
-
-### 4.1 Projects
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/projects` | Create project (content_type, visual_style, aspect_ratio, duration_target, quality_tier, source_text) |
-| GET | `/projects` | List projects (paginated) |
-| GET | `/projects/{id}` | Get project detail |
-| PUT | `/projects/{id}` | Update project |
-| DELETE | `/projects/{id}` | Soft-delete |
-| GET | `/projects/{id}/status` | Aggregate progress (per-shot, per-phase) |
-
-### 4.2 Script & Storyboard
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/projects/{id}/script/check` | Sensitive word detection |
-| POST | `/projects/{id}/storyboard/generate` | Trigger LLM breakdown (async) |
-| GET | `/projects/{id}/storyboard` | Get storyboard with all shots |
-| PUT | `/projects/{id}/storyboard/shots/{shot_id}` | Edit shot prompt/narration |
-| POST | `/projects/{id}/storyboard/regenerate` | Re-run LLM (new version) |
-
-### 4.3 Characters
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/characters` | List character library (filter by tags, style) |
-| POST | `/characters` | Create character |
-| GET | `/characters/{id}` | Get character with images |
-| PUT | `/characters/{id}` | Update character |
-| DELETE | `/characters/{id}` | Soft-delete |
-| POST | `/characters/{id}/generate-image` | Trigger gacha (Jimeng) |
-| GET | `/characters/{id}/images` | List gacha candidates |
-| POST | `/characters/{id}/images/{img_id}/select` | Pick canonical image |
-
-### 4.4 Shot Images
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/projects/{id}/shots/{shot_id}/generate-image` | Generate shot image |
-| GET | `/projects/{id}/shots/{shot_id}/images` | List image candidates |
-| POST | `/projects/{id}/shots/{shot_id}/images/{img_id}/select` | Pick image |
-| POST | `/projects/{id}/shots/generate-images-batch` | Batch image gen for all pending shots |
-
-### 4.5 Video Generation
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/projects/{id}/shots/{shot_id}/generate-video` | Trigger video gen (auto-routes by quality) |
-| POST | `/projects/{id}/video/generate-batch` | Batch video gen for all shots |
-| GET | `/projects/{id}/video/progress` | Aggregate video gen progress |
-
-### 4.6 TTS
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/tts/voices` | List available voices |
-| PUT | `/projects/{id}/tts/config` | Set TTS config |
-| POST | `/projects/{id}/tts/preview` | Preview TTS for short text |
-| POST | `/projects/{id}/tts/generate-batch` | Generate TTS for all shots |
-
-### 4.7 Assembly
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/projects/{id}/assembly/generate` | Trigger FFmpeg assembly (async) |
-| GET | `/projects/{id}/assembly/status` | Assembly progress |
-| GET | `/projects/{id}/output` | Get MP4 + ZIP download URLs |
-
-### 4.8 Tasks
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/tasks/{task_id}` | Get task status/progress/error |
-| POST | `/tasks/{task_id}/retry` | Retry failed task (checkpoint resume) |
-| POST | `/tasks/{task_id}/cancel` | Cancel task |
-| GET | `/projects/{id}/tasks` | List project tasks (filter by type, status) |
-
-## 5. Service Layer
-
-| Service | Responsibilities |
-|---------|-----------------|
-| **ScriptService** | Sensitive word detection, input validation |
-| **StoryboardService** | Trigger LLM breakdown, parse response, manage shots |
-| **CharacterService** | Character CRUD, gacha trigger, image selection |
-| **ImageGenerationService** | Shot image gen, batch dispatch, selection |
-| **VideoGenerationService** | Quality routing, batch dispatch, progress tracking |
-| **TTSService** | Config, preview, batch generate |
-| **AssemblyService** | Timeline computation, FFmpeg assembly, ZIP packaging |
-| **ProjectService** | Status aggregation, step advancement, checkpoint resume |
-| **TaskService** | Task lifecycle, retry, cancel, hierarchy management |
-| **StorageService** | OSS upload/download, path conventions, CDN URL |
-
-## 6. External API Provider Abstraction
+### Step 2: 注册（添加一行 import）
 
 ```python
-class ExternalAIProvider(ABC):
-    provider_name: str
-
-    async def submit_job(self, params: dict) -> str:
-        """Submit job, return external_job_id."""
-
-    async def poll_job(self, external_job_id: str) -> JobStatus:
-        """Poll status. Returns state + result_url."""
-
-    async def cancel_job(self, external_job_id: str) -> bool:
-        """Best-effort cancel."""
-
-    async def download_result(self, result_url: str) -> bytes:
-        """Download generated artifact."""
+# app/workflows/__init__.py
+from .templates import narration_manga  # 已有
+from .templates import talking_head     # 新增
 ```
 
-Concrete implementations:
-- `QwenProvider` — LLM script breakdown
-- `JimengProvider` — Image generation (manga)
-- `KlingProvider` — Video generation (normal quality)
-- `Seedance2Provider` — Video generation (high quality)
-- `ElevenLabsProvider` — TTS voiceover
+### Step 3: 使用
 
-## 7. Config Extensions
+```bash
+# CLI
+python scripts/e2e_v11b.py --workflow talking_head --input data/script.txt
 
+# API（自动可用）
+# GET  /api/v1/workflows/     → 列出所有模板
+# POST /api/v1/workflows/run  → {"workflow": "talking_head", ...}
 ```
-# LLM
-QWEN_API_KEY, QWEN_MODEL (default "qwen-plus")
 
-# Image/Video
-JIMENG_API_KEY, JIMENG_BASE_URL
-KLING_API_KEY, KLING_BASE_URL
-SEEDANCE2_API_KEY, SEEDANCE2_BASE_URL
+不需要改动 base.py、registry.py、e2e_v11b.py、router.py 或任何 vendor/service 代码。
 
-# TTS
-ELEVENLABS_API_KEY, ELEVENLABS_BASE_URL
+## 7. 设计原则
 
-# Storage
-OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET, OSS_ENDPOINT, OSS_CDN_DOMAIN
+1. **模板决定"做什么"，能力层提供"怎么做"** — 不同模板可以有完全不同的 Stage 序列，但复用相同的 AI 服务和工具函数
+2. **WorkflowContext 是唯一的数据通道** — Stage 之间不通过全局变量或文件约定传递数据，全部通过 Context 对象
+3. **Stage 方法可独立测试** — 每个 `stage_xxx` 接收 Context、返回 StageResult，可以单独 mock 测试
+4. **注册即可用** — `@register_workflow` 装饰器 + 一行 import，CLI 和 API 都自动识别新模板
+5. **TTS 驱动时长** — 真实音频时长决定视频时长，而非估算值，避免资源浪费
 
-# Feature Flags
-MULTIMODAL_MODE=false (reserved for future)
-LLM_PROVIDER=qwen (switchable)
-```
+## 8. 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 语言 | Python 3.11+ |
+| Web 框架 | FastAPI (async) |
+| 数据库 | PostgreSQL 15 (JSONB) |
+| 任务队列 | Redis 7 + arq |
+| 存储 | 本地文件系统 / 阿里云 OSS |
+| 容器化 | Docker + docker-compose |
+| 视频处理 | FFmpeg |
