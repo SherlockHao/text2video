@@ -1,7 +1,7 @@
 # 服务端架构文档
 
 > Project: AI Text-to-Video Marketing Production Tool
-> Version: v2.0 (Workflow Template Engine)
+> Version: v3.0 (Interactive Workflow + Candidate Management)
 > Updated: 2026-03-22
 
 ## 1. 整体架构
@@ -46,12 +46,14 @@
 ```
 text2video/
 ├── scripts/
-│   └── e2e_v11b.py              # CLI 运行器（thin runner，调用 workflow 引擎）
+│   └── e2e_v11b.py              # CLI（run/review/edit/reroll/select 子命令）
 │
 ├── app/
 │   ├── workflows/               # 工作流引擎
 │   │   ├── base.py              # BaseWorkflow 基类 + WorkflowContext 上下文
 │   │   ├── registry.py          # 模板注册表（@register_workflow 装饰器）
+│   │   ├── candidates.py        # CandidateManager（候选项管理 + 失效级联）
+│   │   ├── interactive.py       # InteractiveOpsMixin（review/edit/reroll/select）
 │   │   └── templates/
 │   │       └── narration_manga.py  # 旁白漫剧模板（9 Stages）
 │   │
@@ -290,13 +292,133 @@ python scripts/e2e_v11b.py --workflow talking_head --input data/script.txt
 
 不需要改动 base.py、registry.py、e2e_v11b.py、router.py 或任何 vendor/service 代码。
 
-## 7. 设计原则
+## 7. 交互操作（Review / Edit / Reroll / Select）
+
+### 7.1 架构
+
+```
+Agent / Web UI
+    ↓ CLI 子命令 或 REST API
+┌─────────────────────────────────┐
+│ InteractiveOpsMixin             │
+│  op_review_*  → 读取状态        │
+│  op_edit_*    → 编辑分镜        │
+│  op_reroll_*  → 生成新候选项    │
+│  op_select    → 选择候选项      │
+└──────────┬──────────────────────┘
+           ↓
+┌─────────────────────────────────┐
+│ CandidateManager                │
+│  candidates.json                │
+│  - 每个资产多个候选项           │
+│  - 当前选择跟踪                 │
+│  - 失效级联                     │
+└─────────────────────────────────┘
+```
+
+### 7.2 candidates.json 结构
+
+```json
+{
+  "assets": {
+    "char_ref:char_001": {
+      "candidates": [
+        {"version": 1, "path": "characters/charref_char_001_v1_0.png"},
+        {"version": 2, "path": "characters/charref_char_001_v2_0.png"}
+      ],
+      "selected": 2
+    },
+    "video:seg01_sub01": { ... },
+    "tts:1": { ... }
+  },
+  "invalidated": ["tts:2", "video:seg02_sub01"]
+}
+```
+
+### 7.3 CLI 子命令
+
+```bash
+# 执行流程
+e2e_v11b.py run --output dir --duration 40
+e2e_v11b.py run --output dir --stop-after-stage storyboard
+
+# 审查
+e2e_v11b.py review storyboard --output dir --json
+e2e_v11b.py review tts --output dir --json
+e2e_v11b.py review char_refs --output dir --json
+e2e_v11b.py review videos --output dir --json
+e2e_v11b.py review status --output dir --json
+
+# 编辑分镜
+e2e_v11b.py edit storyboard --output dir --segment 2 --field narration_text --value "新旁白"
+e2e_v11b.py edit storyboard --output dir --segment 1 --field video_prompt --sub 2 --value "新动作"
+
+# 抽卡（生成新候选项）
+e2e_v11b.py reroll char_ref --output dir --char char_001
+e2e_v11b.py reroll video --output dir --seg 1 --sub 1
+e2e_v11b.py reroll tts --output dir --seg 2 --emotion angry
+
+# 选择候选项
+e2e_v11b.py select char_ref --output dir --char char_001 --candidate 2
+e2e_v11b.py select video --output dir --seg 1 --sub 1 --candidate 2
+
+# 列出候选项
+e2e_v11b.py list-candidates char_ref --output dir --char char_001 --json
+```
+
+所有命令加 `--json` 输出 JSON（供 Agent 消费）。
+
+### 7.4 编辑后的失效级联
+
+| 编辑内容 | 自动失效的下游资产 |
+|---|---|
+| `narration_text` | 该段 TTS + 该段所有视频 |
+| `emotion` | 该段 TTS |
+| `image_prompt` | 该段首帧图 |
+| `video_prompt`（子镜头） | 对应视频 |
+| `appearance_prompt` | 角色参考图 + 引用该角色的所有视频 |
+| 选择新角色参考图 | 引用该角色的所有视频 |
+| 选择新首帧图 | 对应视频 |
+
+失效资产在下次 `run` 时自动重新生成。
+
+### 7.5 Agent 工作流示例
+
+```bash
+# 1. 跑到分镜
+e2e_v11b.py run --output dir --stop-after-stage storyboard
+
+# 2. Agent 审查
+e2e_v11b.py review storyboard --output dir --json
+
+# 3. Agent 改旁白
+e2e_v11b.py edit storyboard --output dir --segment 2 --field narration_text --value "更好的旁白"
+
+# 4. 继续跑到图片
+e2e_v11b.py run --output dir --stop-after-stage char_refs
+
+# 5. Agent 抽卡
+e2e_v11b.py reroll char_ref --output dir --char char_002
+e2e_v11b.py reroll char_ref --output dir --char char_002
+
+# 6. Agent 选择
+e2e_v11b.py list-candidates char_ref --output dir --char char_002 --json
+e2e_v11b.py select char_ref --output dir --char char_002 --candidate 2
+
+# 7. 跑完
+e2e_v11b.py run --output dir
+```
+
+## 8. 设计原则
 
 1. **模板决定"做什么"，能力层提供"怎么做"** — 不同模板可以有完全不同的 Stage 序列，但复用相同的 AI 服务和工具函数
 2. **WorkflowContext 是唯一的数据通道** — Stage 之间不通过全局变量或文件约定传递数据，全部通过 Context 对象
 3. **Stage 方法可独立测试** — 每个 `stage_xxx` 接收 Context、返回 StageResult，可以单独 mock 测试
 4. **注册即可用** — `@register_workflow` 装饰器 + 一行 import，CLI 和 API 都自动识别新模板
 5. **TTS 驱动时长** — 真实音频时长决定视频时长，而非估算值，避免资源浪费
+6. **断点恢复** — 每个 Stage 检查已有输出（通过 CandidateManager），跳过已完成部分，崩溃后重跑不浪费
+7. **run 是批量，ops 是交互** — `run` 自动执行全流程，交互操作是独立子命令，不互相干扰
+8. **候选项持久化** — 所有抽卡结果保留，不覆盖，用户可以随时切换选择
 
 ## 8. 技术栈
 

@@ -1,5 +1,6 @@
 """
 旁白漫剧工作流模板 — Narration-driven manga drama
+支持断点恢复：每个 Stage 检查已有输出，跳过已完成的部分。
 
 9 Stages:
   1. storyboard     — LLM 分镜（Qwen）
@@ -22,9 +23,11 @@ import subprocess
 import base64
 import math
 import re
+import glob as glob_mod
 
 from app.workflows.base import BaseWorkflow, WorkflowContext, StageResult
 from app.workflows.registry import register_workflow
+from app.workflows.interactive import InteractiveOpsMixin
 from app.ai.duration_planner import (
     plan_sub_shot_durations, get_single_shot_duration,
     DEFAULT_SUB_SHOT_DURATION, KLING_MIN_DURATION, KLING_MAX_DURATION,
@@ -66,8 +69,28 @@ def _extract_last_frame(video_path, output_path):
     return r.returncode == 0 and os.path.exists(output_path)
 
 
+def _file_ok(path):
+    """检查文件是否存在且非空。"""
+    return path and os.path.exists(path) and os.path.getsize(path) > 100
+
+
+def _download_with_retry(url, path, retries=3, timeout=180):
+    """带重试的文件下载。"""
+    for attempt in range(retries):
+        try:
+            r = http_requests.get(url, timeout=timeout)
+            with open(path, "wb") as f:
+                f.write(r.content)
+            if os.path.getsize(path) > 1000:
+                return True
+        except Exception as e:
+            print(f"  Download attempt {attempt+1}/{retries} failed: {type(e).__name__}", flush=True)
+            time.sleep(5 * (attempt + 1))
+    return False
+
+
 @register_workflow
-class NarrationMangaWorkflow(BaseWorkflow):
+class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
     name = "narration_manga"
     display_name = "旁白漫剧"
     stages = [
@@ -83,35 +106,44 @@ class NarrationMangaWorkflow(BaseWorkflow):
     ]
 
     # ================================================================
-    # Stage 1: LLM Storyboard
+    # Stage 1: LLM Storyboard（断点：storyboard.json 存在则跳过）
     # ================================================================
     def stage_storyboard(self, ctx: WorkflowContext) -> StageResult:
-        duration = ctx.params.get("duration", 40)
+        sb_path = f"{ctx.output_dir}/storyboard.json"
 
-        system_prompt = self._build_storyboard_prompt(duration)
-        user_prompt = f"""请将以下小说改编为解说类漫剧短视频分镜脚本。
+        if _file_ok(sb_path):
+            ctx.log(f"  ★ 断点恢复: 加载已有 storyboard.json")
+            with open(sb_path) as f:
+                sb = json.load(f)
+            ctx.storyboard = sb
+            ctx.segments = sb.get("segments", [])
+            ctx.characters = sb.get("character_profiles", [])
+            ctx.scenes = sb.get("scene_backgrounds", [])
+        else:
+            duration = ctx.params.get("duration", 40)
+            system_prompt = self._build_storyboard_prompt(duration)
+            user_prompt = f"""请将以下小说改编为解说类漫剧短视频分镜脚本。
 
 【重要】你是顶级导演，旁白要讲好故事。直接输出JSON，回复以 {{ 开头。
 
 文本内容：
 {ctx.input_text}"""
 
-        raw = chat_with_system(system_prompt, user_prompt, max_tokens=8192)
-        sb = json.loads(_extract_json(raw))
-        ctx.storyboard = sb
-        ctx.segments = sb.get("segments", [])
-        ctx.characters = sb.get("character_profiles", [])
-        ctx.scenes = sb.get("scene_backgrounds", [])
+            raw = chat_with_system(system_prompt, user_prompt, max_tokens=8192)
+            sb = json.loads(_extract_json(raw))
+            ctx.storyboard = sb
+            ctx.segments = sb.get("segments", [])
+            ctx.characters = sb.get("character_profiles", [])
+            ctx.scenes = sb.get("scene_backgrounds", [])
 
-        # 旁白超长则压缩
-        for seg in ctx.segments:
-            nt = seg.get("narration_text", "")
-            if len(nt) > 30:
-                seg["narration_text"] = shorten_narration_via_llm(
-                    nt, 30, seg.get("scene_description", ""))
+            for seg in ctx.segments:
+                nt = seg.get("narration_text", "")
+                if len(nt) > 30:
+                    seg["narration_text"] = shorten_narration_via_llm(
+                        nt, 30, seg.get("scene_description", ""))
 
-        with open(f"{ctx.output_dir}/storyboard.json", "w") as f:
-            json.dump(sb, f, ensure_ascii=False, indent=2)
+            with open(sb_path, "w") as f:
+                json.dump(sb, f, ensure_ascii=False, indent=2)
 
         ctx.log(f"  {len(ctx.segments)} segments, {len(ctx.scenes)} scenes, {len(ctx.characters)} chars")
         for c in ctx.characters:
@@ -128,41 +160,65 @@ class NarrationMangaWorkflow(BaseWorkflow):
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 2: TTS
+    # Stage 2: TTS（断点：已有音频文件则跳过对应段）
     # ================================================================
     def stage_tts(self, ctx: WorkflowContext) -> StageResult:
         voice_id = ctx.params.get("voice", "female-shaonv")
 
-        async def _gen():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
-            paths = {}
-            for seg in ctx.segments:
-                sn = seg["segment_number"]
-                text = seg.get("narration_text", "")
-                if not text:
+        # 检查已有 TTS（通过候选项管理器）
+        existing_count = 0
+        for seg in ctx.segments:
+            sn = seg["segment_number"]
+            asset_key = f"tts:{sn}"
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and _file_ok(sel):
+                    ctx.tts_paths[sn] = sel
+                    existing_count += 1
                     continue
-                emotion = seg.get("emotion", "calm")
-                valid = {"happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent"}
-                if emotion == "whisper":
-                    emotion = "calm"
-                if emotion not in valid:
-                    emotion = "calm"
-                job_id = await provider.submit_job({
-                    "text": text, "voice_id": voice_id, "speed": 0.9, "emotion": emotion,
-                })
-                status = await provider.poll_job(job_id)
-                if status.result_data:
-                    path = f"{ctx.output_dir}/audio/seg_{sn:02d}.mp3"
-                    with open(path, "wb") as f:
-                        f.write(status.result_data)
-                    paths[sn] = path
-                    ctx.log(f"  Seg {sn}: ✓ (emotion={emotion})")
-                await asyncio.sleep(1)
-            return paths
+            ctx.candidates.clear_invalidation(asset_key)
 
-        ctx.tts_paths = asyncio.run(_gen())
+        if existing_count == len(ctx.segments):
+            ctx.log(f"  ★ 断点恢复: 所有 {existing_count} 段 TTS 已存在")
+        else:
+            missing = [seg for seg in ctx.segments
+                       if seg["segment_number"] not in ctx.tts_paths]
+            if existing_count > 0:
+                ctx.log(f"  ★ 断点恢复: {existing_count} 段已存在，补生成 {len(missing)} 段")
 
+            async def _gen():
+                from app.ai.providers.minimax_tts import MiniMaxTTSProvider
+                provider = MiniMaxTTSProvider()
+                for seg in missing:
+                    sn = seg["segment_number"]
+                    text = seg.get("narration_text", "")
+                    if not text:
+                        continue
+                    emotion = seg.get("emotion", "calm")
+                    valid = {"happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent"}
+                    if emotion == "whisper":
+                        emotion = "calm"
+                    if emotion not in valid:
+                        emotion = "calm"
+                    job_id = await provider.submit_job({
+                        "text": text, "voice_id": voice_id, "speed": 0.9, "emotion": emotion,
+                    })
+                    status = await provider.poll_job(job_id)
+                    if status.result_data:
+                        a_key = f"tts:{sn}"
+                        ver = ctx.candidates.next_version(a_key)
+                        path = f"{ctx.output_dir}/audio/seg_{sn:02d}_v{ver}.mp3"
+                        with open(path, "wb") as f:
+                            f.write(status.result_data)
+                        rel = os.path.relpath(path, ctx.output_dir)
+                        ctx.candidates.register(a_key, rel)
+                        ctx.tts_paths[sn] = path
+                        ctx.log(f"  Seg {sn}: ✓ (emotion={emotion}, v{ver})")
+                    await asyncio.sleep(1)
+
+            asyncio.run(_gen())
+
+        # 读取所有 TTS 时长
         for seg in ctx.segments:
             sn = seg["segment_number"]
             if sn in ctx.tts_paths:
@@ -172,7 +228,7 @@ class NarrationMangaWorkflow(BaseWorkflow):
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 3: Duration Planning
+    # Stage 3: Duration Planning（总是重新计算，无需断点）
     # ================================================================
     def stage_duration_plan(self, ctx: WorkflowContext) -> StageResult:
         for seg in ctx.segments:
@@ -189,7 +245,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
             adjusted, durations = plan_sub_shot_durations(subs, tts_dur)
 
             if adjusted is None:
-                # Case 4: 重新生成单镜头
                 target_dur = get_single_shot_duration(tts_dur)
                 new_subs = self._regenerate_single_shot(seg, target_dur)
                 seg["sub_shots"] = new_subs
@@ -201,7 +256,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 dur_str = "+".join(str(d) for d in durations)
                 ctx.log(f"    → {dur_str} = {sum(durations)}s")
 
-        # 保存更新后的 storyboard
         with open(f"{ctx.output_dir}/storyboard.json", "w") as f:
             json.dump(ctx.storyboard, f, ensure_ascii=False, indent=2)
 
@@ -225,11 +279,21 @@ class NarrationMangaWorkflow(BaseWorkflow):
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 4: Character Reference Images
+    # Stage 4: Character Refs（断点：候选项管理）
     # ================================================================
     def stage_char_refs(self, ctx: WorkflowContext) -> StageResult:
         for c in ctx.characters:
             cid = c["char_id"]
+            asset_key = f"char_ref:{cid}"
+            # 断点：检查候选项管理器中是否有选中的且未失效的
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and _file_ok(sel):
+                    ctx.char_images[cid] = sel
+                    ctx.log(f"  {c['name']} ({cid}): ★ 已存在")
+                    continue
+            ctx.candidates.clear_invalidation(asset_key)
+
             gender = c.get("gender", "female")
             appearance = c.get("appearance_prompt", "")
             pose = ("面无表情，笔直站立，四分之三侧面，双臂自然放松，自信姿态"
@@ -243,21 +307,33 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 "纯净浅灰色背景, 摄影棚灯光, "
                 "无文字, 无水印, 高清锐利, 无其他角色, 单人"
             )
+            version = ctx.candidates.next_version(asset_key)
             paths = generate_image(prompt, width=832, height=1472,
                                    output_dir=f"{ctx.output_dir}/characters",
-                                   prefix=f"charref_{cid}")
+                                   prefix=f"charref_{cid}_v{version}")
             if paths:
+                rel = os.path.relpath(paths[0], ctx.output_dir)
+                ctx.candidates.register(asset_key, rel)
                 ctx.char_images[cid] = paths[0]
-                ctx.log(f"  {c['name']} ({cid}): ✓")
+                ctx.log(f"  {c['name']} ({cid}): ✓ (v{version})")
             time.sleep(3)
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 5: Scene Background Images
+    # Stage 5: Scene Backgrounds（断点：候选项管理）
     # ================================================================
     def stage_scene_bgs(self, ctx: WorkflowContext) -> StageResult:
         for sc in ctx.scenes:
             sid = sc["scene_id"]
+            asset_key = f"scene_bg:{sid}"
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and _file_ok(sel):
+                    ctx.scene_images[sid] = sel
+                    ctx.log(f"  {sid} ({sc['name']}): ★ 已存在")
+                    continue
+            ctx.candidates.clear_invalidation(asset_key)
+
             desc = sc.get("scene_prompt", "")
             if "无人物" not in desc:
                 desc += ", 漫画风格, 动漫背景, 无人物, 无角色"
@@ -267,23 +343,25 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 f"远景全景, {desc}, "
                 "空气透视, 精细环境, 无文字, 无水印"
             )
+            version = ctx.candidates.next_version(asset_key)
             paths = generate_image(prompt, width=832, height=1472,
                                    output_dir=f"{ctx.output_dir}/scenes",
-                                   prefix=f"scenebg_{sid}")
+                                   prefix=f"scenebg_{sid}_v{version}")
             if paths:
+                rel = os.path.relpath(paths[0], ctx.output_dir)
+                ctx.candidates.register(asset_key, rel)
                 ctx.scene_images[sid] = paths[0]
-                ctx.log(f"  {sid} ({sc['name']}): ✓")
+                ctx.log(f"  {sid} ({sc['name']}): ✓ (v{version})")
             time.sleep(3)
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 6: First-Frame Generation
+    # Stage 6: First-Frame（断点：已有首帧则跳过）
     # ================================================================
     def stage_first_frames(self, ctx: WorkflowContext) -> StageResult:
         profiles_map = {c["char_id"]: c for c in ctx.characters}
         scene_desc_map = {s["scene_id"]: s for s in ctx.scenes}
 
-        # 确定首帧策略
         ctx.sub_shot_plan = []
         prev_sid = None
         for seg_idx, sub_idx, seg, sub in ctx.all_sub_shots:
@@ -300,10 +378,19 @@ class NarrationMangaWorkflow(BaseWorkflow):
         for i, (_, sub_idx, seg, _) in enumerate(ctx.all_sub_shots):
             ctx.log(f"  Seg{seg['segment_number']}-Sub{sub_idx+1}: {ctx.sub_shot_plan[i]} ({ctx.all_durations[i]}s)")
 
-        # 生成 T2I 首帧
         for i, (seg_idx, sub_idx, seg, sub) in enumerate(ctx.all_sub_shots):
             if ctx.sub_shot_plan[i] != "t2i":
                 continue
+
+            sn = seg["segment_number"]
+            asset_key = f"first_frame:seg{sn:02d}_sub{sub_idx+1:02d}"
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and _file_ok(sel):
+                    ctx.t2i_images[i] = sel
+                    ctx.log(f"  Seg{sn}-Sub{sub_idx+1} first-frame: ★ 已存在")
+                    continue
+            ctx.candidates.clear_invalidation(asset_key)
 
             chars_in = seg.get("characters_in_shot", [])
             sid = seg.get("scene_id", "")
@@ -335,19 +422,21 @@ class NarrationMangaWorkflow(BaseWorkflow):
                     parts.append(f"背景: {sd.replace('无人物, 无角色', '').strip(' ,.')}")
                 prompt = ", ".join(parts)
 
-            sn = seg["segment_number"]
+            version = ctx.candidates.next_version(asset_key)
             paths = generate_image(prompt, width=832, height=1472,
                                    output_dir=f"{ctx.output_dir}/images",
-                                   prefix=f"seg{sn:02d}_sub{sub_idx+1:02d}")
+                                   prefix=f"seg{sn:02d}_sub{sub_idx+1:02d}_v{version}")
             if paths:
+                rel = os.path.relpath(paths[0], ctx.output_dir)
+                ctx.candidates.register(asset_key, rel)
                 ctx.t2i_images[i] = paths[0]
-                ctx.log(f"  Seg{sn}-Sub{sub_idx+1} first-frame: ✓")
+                ctx.log(f"  Seg{sn}-Sub{sub_idx+1} first-frame: ✓ (v{version})")
             time.sleep(3)
 
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 7: Video Generation
+    # Stage 7: Video Generation（断点：已有视频则跳过，提取末帧继续）
     # ================================================================
     def stage_video_gen(self, ctx: WorkflowContext) -> StageResult:
         kling = KlingClient()
@@ -361,6 +450,23 @@ class NarrationMangaWorkflow(BaseWorkflow):
             shot_duration = ctx.all_durations[i]
 
             ctx.log(f"\n  --- Seg{sn}-Sub{sub_idx+1} ({i+1}/{total_subs}) ---")
+
+            # ★ 断点检查：候选项管理器
+            asset_key = f"video:seg{sn:02d}_sub{sub_idx+1:02d}"
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and _file_ok(sel):
+                    ctx.sub_shot_videos[i] = sel
+                    ctx.total_generated += 1
+                    dur_v = get_media_duration(sel)
+                    sz = os.path.getsize(sel) / 1024 / 1024
+                    ctx.log(f"  ★ 已存在: {dur_v:.1f}s, {sz:.1f}MB")
+                    lf_path = f"{ctx.output_dir}/frames/seg{sn:02d}_sub{sub_idx+1:02d}_lastframe.png"
+                    if not _file_ok(lf_path):
+                        _extract_last_frame(sel, lf_path)
+                    prev_last_frame = lf_path if _file_ok(lf_path) else None
+                    continue
+            ctx.candidates.clear_invalidation(asset_key)
 
             # 首帧
             if ctx.sub_shot_plan[i] == "t2i":
@@ -400,10 +506,10 @@ class NarrationMangaWorkflow(BaseWorkflow):
             kling_dur = str(max(KLING_MIN_DURATION, min(KLING_MAX_DURATION, shot_duration)))
             ctx.log(f"  Duration: {kling_dur}s | {sub.get('shot_type', '?')}")
 
-            # 调用 Kling V3
+            # 调用 Kling V3（带重试）
             first_b64 = _img_to_b64(first_frame_path)
             resp = None
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     resp = kling.generate_video(
                         image=first_b64, prompt=motion_prompt,
@@ -413,9 +519,8 @@ class NarrationMangaWorkflow(BaseWorkflow):
                         subject_reference=subject_ref if subject_ref else None,
                     )
                 except Exception as e:
-                    ctx.log(f"  Attempt {attempt+1} error: {e}")
-                    if attempt == 0: time.sleep(10); continue
-                    else: break
+                    ctx.log(f"  Submit attempt {attempt+1} error: {type(e).__name__}")
+                    time.sleep(10 * (attempt + 1)); continue
 
                 code = resp.get("code", -1) if resp else -1
                 if code == 1303:
@@ -423,11 +528,11 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 elif code == 0:
                     break
                 else:
-                    ctx.log(f"  Attempt {attempt+1} failed: code={code}")
-                    if attempt == 0: time.sleep(10); continue
+                    ctx.log(f"  Submit attempt {attempt+1} failed: code={code}")
+                    time.sleep(10 * (attempt + 1)); continue
 
             if not resp or resp.get("code") != 0:
-                ctx.log(f"  FAILED"); prev_last_frame = None; continue
+                ctx.log(f"  SUBMIT FAILED after retries"); prev_last_frame = None; continue
 
             task_id = resp["data"]["task_id"]
             ctx.log(f"  Task: {task_id}, polling...")
@@ -439,10 +544,14 @@ class NarrationMangaWorkflow(BaseWorkflow):
             if not videos or not videos[0].get("url"):
                 ctx.log(f"  No video URL"); prev_last_frame = None; continue
 
-            video_path = f"{ctx.output_dir}/videos/seg{sn:02d}_sub{sub_idx+1:02d}.mp4"
-            r = http_requests.get(videos[0]["url"], timeout=120)
-            with open(video_path, "wb") as f:
-                f.write(r.content)
+            # 下载（带重试）
+            version = ctx.candidates.next_version(asset_key)
+            video_path = f"{ctx.output_dir}/videos/seg{sn:02d}_sub{sub_idx+1:02d}_v{version}.mp4"
+            if not _download_with_retry(videos[0]["url"], video_path):
+                ctx.log(f"  Download FAILED"); prev_last_frame = None; continue
+
+            rel = os.path.relpath(video_path, ctx.output_dir)
+            ctx.candidates.register(asset_key, rel)
             ctx.sub_shot_videos[i] = video_path
             ctx.total_generated += 1
 
@@ -457,7 +566,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 prev_last_frame = None
                 ctx.log(f"  ✓ {dur_v:.1f}s, {sz:.1f}MB")
 
-            # 按段停止
             if stop_seg and sn >= stop_seg:
                 is_last = (sub_idx == len(seg.get("sub_shots", [])) - 1)
                 if is_last:
@@ -470,10 +578,9 @@ class NarrationMangaWorkflow(BaseWorkflow):
         return StageResult(success=True)
 
     # ================================================================
-    # Stage 8: Assembly
+    # Stage 8: Assembly（总是重新执行）
     # ================================================================
     def stage_assembly(self, ctx: WorkflowContext) -> StageResult:
-        # 8a: 拼接子镜头 → 段视频
         segment_videos = {}
         for seg in ctx.segments:
             sn = seg["segment_number"]
@@ -498,7 +605,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
                 segment_videos[sn] = out
                 ctx.log(f"  Seg {sn}: {len(paths)} sub-shots → {get_media_duration(out):.1f}s ✓")
 
-        # 8b: 对齐
         aligned = []
         for seg in ctx.segments:
             sn = seg["segment_number"]
@@ -516,12 +622,11 @@ class NarrationMangaWorkflow(BaseWorkflow):
         if not aligned:
             return StageResult(success=False, message="No aligned segments")
 
-        # 8c: 拼接
         concat = os.path.abspath(f"{ctx.output_dir}/concat_no_bgm.mp4")
         concatenate_clips(aligned, concat)
         ctx.log(f"  Concat: {get_media_duration(concat):.1f}s")
 
-        # 8d: 字幕
+        # 字幕
         srt_path = os.path.abspath(f"{ctx.output_dir}/subtitles.srt")
         current_time = 0.0
         srt_entries = []
@@ -568,7 +673,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
         else:
             ctx.log(f"  Subtitles: ✓")
 
-        # 8e: BGM
         final = os.path.abspath(f"{ctx.output_dir}/final_video.mp4")
         bgm = os.path.abspath("data/bgm/romantic_sweet.mp3")
         overlay_bgm(concat_sub, bgm, final, bgm_volume=0.25)
@@ -589,7 +693,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
         if ctx.final_duration < target * 0.5:
             issues.append(f"Duration {ctx.final_duration:.0f}s < 50% of target {target}s")
 
-        # BGM check
         concat = os.path.abspath(f"{ctx.output_dir}/concat_no_bgm.mp4")
         final = ctx.final_video_path
         sample = str(min(15, ctx.final_duration / 2))
@@ -617,7 +720,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
         if ctx.total_generated < total_subs:
             issues.append(f"Missing videos: {ctx.total_generated}/{total_subs}")
 
-        # 连续性
         prev_sid = None
         for seg in ctx.segments:
             sn = seg["segment_number"]
@@ -645,7 +747,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
     # Internal helpers
     # ================================================================
     def _regenerate_single_shot(self, seg, target_duration):
-        """Case 4: 让 LLM 重新生成单镜头。"""
         nt = seg.get("narration_text", "")
         scene_desc = seg.get("scene_description", "")
         chars = seg.get("characters_in_shot", [])
@@ -667,7 +768,6 @@ class NarrationMangaWorkflow(BaseWorkflow):
                      "camera_movement": "zoom_in"}]
 
     def _build_storyboard_prompt(self, duration):
-        """构建 LLM 分镜 system prompt。"""
         return f"""你是一位顶级短剧导演兼编剧，擅长将小说文本改编为"解说类漫剧"短视频分镜。
 
 ## 你的任务

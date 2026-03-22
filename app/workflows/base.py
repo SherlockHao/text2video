@@ -7,7 +7,10 @@ import os
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .candidates import CandidateManager
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,9 @@ class WorkflowContext:
     quality_issues: list = field(default_factory=list)
     quality_passed: bool = False
 
+    # 候选项管理
+    candidates: Any = None  # CandidateManager instance
+
     # 执行状态
     current_stage: str = ""
     completed_stages: list = field(default_factory=list)
@@ -112,6 +118,8 @@ class BaseWorkflow:
         Returns:
             WorkflowContext: 最终上下文
         """
+        from .candidates import CandidateManager
+
         params = params or {}
         ctx = WorkflowContext(
             input_text=input_text,
@@ -122,6 +130,10 @@ class BaseWorkflow:
         # 创建输出子目录
         for d in self.get_output_subdirs():
             os.makedirs(f"{output_dir}/{d}", exist_ok=True)
+
+        # 初始化候选项管理器
+        ctx.candidates = CandidateManager(output_dir)
+        ctx.candidates.migrate_from_existing(output_dir)
 
         ctx.log(f"\n{'='*60}")
         ctx.log(f"Workflow: {self.display_name} ({self.name})")
@@ -176,3 +188,44 @@ class BaseWorkflow:
         """子类可覆写以定义输出子目录。"""
         return ["images", "scenes", "characters", "videos", "audio",
                 "aligned", "frames", "segments"]
+
+    @staticmethod
+    def load_context_from_disk(output_dir: str, params: dict = None) -> WorkflowContext:
+        """从磁盘重建 WorkflowContext，用于交互操作。"""
+        from .candidates import CandidateManager
+
+        ctx = WorkflowContext(output_dir=output_dir, params=params or {})
+        ctx.candidates = CandidateManager(output_dir)
+        ctx.candidates.migrate_from_existing(output_dir)
+
+        sb_path = os.path.join(output_dir, "storyboard.json")
+        if os.path.exists(sb_path):
+            with open(sb_path) as f:
+                sb = json.load(f)
+            ctx.storyboard = sb
+            ctx.segments = sb.get("segments", [])
+            ctx.characters = sb.get("character_profiles", [])
+            ctx.scenes = sb.get("scene_backgrounds", [])
+
+        # 加载 TTS
+        for seg in ctx.segments:
+            sn = seg["segment_number"]
+            p = os.path.join(output_dir, f"audio/seg_{sn:02d}.mp3")
+            if os.path.exists(p) and os.path.getsize(p) > 100:
+                ctx.tts_paths[sn] = p
+
+        # 加载角色图
+        for c in ctx.characters:
+            cid = c["char_id"]
+            sel = ctx.candidates.get_selected_path(f"char_ref:{cid}")
+            if sel and os.path.exists(sel):
+                ctx.char_images[cid] = sel
+
+        # 加载场景图
+        for sc in ctx.scenes:
+            sid = sc["scene_id"]
+            sel = ctx.candidates.get_selected_path(f"scene_bg:{sid}")
+            if sel and os.path.exists(sel):
+                ctx.scene_images[sid] = sel
+
+        return ctx
