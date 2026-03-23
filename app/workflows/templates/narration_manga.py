@@ -42,27 +42,27 @@ from app.services.narration_utils import shorten_narration_via_llm
 import requests as http_requests
 
 NEGATIVE_PROMPT = (
-    "blurry, low quality, distorted face, extra fingers, deformed, morphing, "
-    "flickering, abrupt scene change, live action, photorealistic, "
-    "text, watermark, signature, frame, border, "
-    "style change, color shift, inconsistent character, extra limbs"
+    "模糊, 低质量, 面部扭曲, 多余手指, 变形, 形变, "
+    "闪烁, 突然切换场景, 真人实拍, 写实风格, "
+    "文字, 水印, 签名, 边框, "
+    "风格突变, 色彩偏移, 角色不一致, 多余肢体"
 )
 
 CAMERA_MAP = {
-    "push_in": "camera pushes in forward",
-    "pull_back": "camera pulls back slowly",
-    "pan": "camera pans sideways smoothly",
-    "tracking": "camera tracks the subject",
-    "orbit": "camera slowly orbits around",
-    "static": "camera holds steady",
+    "push_in": "镜头贴近主体前移，压缩空间",
+    "pull_back": "镜头缓缓后退，展开场景全貌",
+    "pan": "镜头横向平移扫景",
+    "tracking": "镜头同步跟随主体移动",
+    "orbit": "镜头缓慢环绕拍摄",
+    "static": "镜头固定不动",
     # 向后兼容旧值
-    "zoom_in": "camera pushes in forward",
-    "zoom_out": "camera pulls back slowly",
-    "pan_left": "camera pans left smoothly",
-    "pan_right": "camera pans right smoothly",
-    "dolly_in": "camera pushes in forward",
-    "tilt_up": "camera tilts upward slowly",
-    "tilt_down": "camera tilts downward slowly",
+    "zoom_in": "镜头贴近主体前移",
+    "zoom_out": "镜头缓缓后退",
+    "pan_left": "镜头向左平移",
+    "pan_right": "镜头向右平移",
+    "dolly_in": "镜头平滑向前推进",
+    "tilt_up": "镜头缓慢上摇",
+    "tilt_down": "镜头缓慢下摇",
 }
 
 
@@ -502,14 +502,14 @@ class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 if cid in ctx.char_images:
                     subject_ref.append({"image": _img_to_b64(ctx.char_images[cid])})
 
-            # Motion prompt (英文)
+            # Motion prompt
             vp = sub.get("video_prompt", "")
             cam = sub.get("camera_movement", "static")
             parts = []
-            parts.append(vp or "subtle character animation, gentle breathing, slight weight shift")
-            if "camera" not in vp.lower():
-                parts.append(CAMERA_MAP.get(cam, "camera holds steady"))
-            parts.append("hair sways gently, cloth physics, anime style, smooth animation")
+            parts.append(vp or "角色微妙动态，轻微呼吸，细微重心转移")
+            if "镜头" not in vp:
+                parts.append(CAMERA_MAP.get(cam, "镜头固定不动"))
+            parts.append("发丝轻轻飘动，衣物物理效果，动漫风格，流畅动画")
             motion_prompt = ", ".join(parts)
 
             kling_dur = str(max(KLING_MIN_DURATION, min(KLING_MAX_DURATION, shot_duration)))
@@ -797,19 +797,19 @@ class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 - 色彩丰富，避免全黑灰。男性必须强调"高大威严的成年男性"
 
 ## 4. 画面(video_prompt) —— 极简原则
-- 使用英文，仅包含"主体动作"+"高级运镜描述"
+- 使用中文，仅包含"主体动作"+"高级运镜描述"
 - 严禁重复描述外貌和背景（视频生成时通过参考图注入）
 - 双人同框必须分别描述两人动作
 - 每个子镜头只有5秒，动作幅度要小且有起止
 
 ## 5. 镜头语言(Camera Motion)
-必须根据当前剧情情绪，从以下运镜中选择，并在 video_prompt 中用英文高级描述：
-- [推镜 push_in]: Camera pushes in forward — 压缩空间强化焦点（情绪爆发/特写）
-- [拉镜 pull_back]: Camera pulls back slowly — 展场景，环境叙事感（交代背景/孤独感）
-- [移镜 pan]: Camera pans sideways — 平行视角扫景（展示全貌/时间流逝）
-- [跟镜 tracking]: Camera tracks the subject — 捕捉主体轨迹（跟随运动）
-- [环绕 orbit]: Camera orbits around — 360°沉浸氛围（高光时刻/对峙）
-- [固定 static]: Camera holds steady — 稳定安静（客观叙事/内心独白）
+必须根据当前剧情情绪，从以下运镜中选择，并在 video_prompt 中用中文高级描述：
+- [推镜 push_in]: 镜头贴近主体前移，压缩空间强化焦点（适用情绪爆发/特写）
+- [拉镜 pull_back]: 镜头缓缓后退展开场景，带出环境叙事感（适用交代背景/孤独感）
+- [移镜 pan]: 镜头横向平移扫景，形成动态平行视角（适用展示全貌/时间流逝）
+- [跟镜 tracking]: 镜头同步跟随主体移动，捕捉运动轨迹（适用跟随/行走）
+- [环绕 orbit]: 镜头360°环绕拍摄，建立沉浸氛围（适用高光时刻/浪漫/对峙）
+- [固定 static]: 镜头稳定不动，安静客观（适用叙事/内心独白）
 
 ## 6. 情绪标注(emotion)
 happy / sad / angry / fearful / surprised / calm / whisper
@@ -838,13 +838,13 @@ happy / sad / angry / fearful / surprised / calm / whisper
       "image_prompt": "杰作, 4K, 动漫风格, 角色外貌+姿态+场景+光线",
       "sub_shots": [
         {{{{
-          "shot_type": "full shot",
-          "video_prompt": "English: subject action + camera motion (e.g. The woman walks forward quickly, camera tracks the subject from the side)",
+          "shot_type": "全景",
+          "video_prompt": "女子低头快步向前走，镜头从侧面同步跟随她的步伐",
           "camera_movement": "tracking"
         }}}},
         {{{{
-          "shot_type": "extreme close-up",
-          "video_prompt": "English: subject action + camera motion",
+          "shot_type": "大特写",
+          "video_prompt": "手指紧紧攥住文件夹边缘，镜头贴近前移压迫感十足",
           "camera_movement": "push_in"
         }}}}
       ]
@@ -856,7 +856,8 @@ happy / sad / angry / fearful / surprised / calm / whisper
 1. 4-5个叙事段，每段2-3个子镜头
 2. 总子镜头数 × 5秒 ≈ {duration}s
 3. narration_text 20-30字中文，讲故事不描述画面
-4. video_prompt 英文，极简（动作+运镜），禁止外貌/场景描述
+4. video_prompt 中文，极简（动作+运镜），禁止外貌/场景描述
 5. camera_movement 从 push_in/pull_back/pan/tracking/orbit/static 中选择
-6. shot_type 使用英文景别：extreme close-up / close-up / medium shot / full shot / wide shot
-7. 只输出JSON"""
+6. shot_type 使用中文景别：大特写/特写/近景/中景/全景/远景
+7. 所有输出均使用中文
+8. 只输出JSON"""
