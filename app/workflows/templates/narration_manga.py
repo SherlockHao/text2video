@@ -42,18 +42,27 @@ from app.services.narration_utils import shorten_narration_via_llm
 import requests as http_requests
 
 NEGATIVE_PROMPT = (
-    "模糊, 低质量, 面部扭曲, 多余手指, 变形, 形变, "
-    "闪烁, 突然切换场景, 真人实拍, 写实风格, "
-    "文字, 水印, 签名, 边框, "
-    "风格突变, 色彩偏移, 角色不一致, 多余肢体"
+    "blurry, low quality, distorted face, extra fingers, deformed, morphing, "
+    "flickering, abrupt scene change, live action, photorealistic, "
+    "text, watermark, signature, frame, border, "
+    "style change, color shift, inconsistent character, extra limbs"
 )
 
 CAMERA_MAP = {
-    "static": "镜头保持不动", "pan_left": "镜头缓慢向左平移",
-    "pan_right": "镜头缓慢向右平移", "zoom_in": "镜头缓慢推近",
-    "zoom_out": "镜头缓慢拉远", "tilt_up": "镜头缓慢上摇",
-    "tilt_down": "镜头缓慢下摇", "tracking": "镜头跟随主体移动",
-    "dolly_in": "镜头平滑向前推进", "orbit": "镜头缓慢环绕",
+    "push_in": "camera pushes in forward",
+    "pull_back": "camera pulls back slowly",
+    "pan": "camera pans sideways smoothly",
+    "tracking": "camera tracks the subject",
+    "orbit": "camera slowly orbits around",
+    "static": "camera holds steady",
+    # 向后兼容旧值
+    "zoom_in": "camera pushes in forward",
+    "zoom_out": "camera pulls back slowly",
+    "pan_left": "camera pans left smoothly",
+    "pan_right": "camera pans right smoothly",
+    "dolly_in": "camera pushes in forward",
+    "tilt_up": "camera tilts upward slowly",
+    "tilt_down": "camera tilts downward slowly",
 }
 
 
@@ -123,8 +132,8 @@ class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
             duration = ctx.params.get("duration", 40)
             system_prompt = self._build_storyboard_prompt(duration)
             user_prompt = f"""请将以下小说改编为解说类漫剧短视频分镜脚本。
-
-【重要】你是顶级导演，旁白要讲好故事。直接输出JSON，回复以 {{ 开头。
+【执行指令】作为顶级导演，请运用高级镜头语言将文本视觉化，旁白务必引人入胜。
+【输出要求】直接且仅输出标准格式的JSON字符串，以 {{ 开头。
 
 文本内容：
 {ctx.input_text}"""
@@ -493,14 +502,14 @@ class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 if cid in ctx.char_images:
                     subject_ref.append({"image": _img_to_b64(ctx.char_images[cid])})
 
-            # Motion prompt
+            # Motion prompt (英文)
             vp = sub.get("video_prompt", "")
             cam = sub.get("camera_movement", "static")
             parts = []
-            parts.append(vp or "角色微妙动态, 轻微呼吸, 细微重心转移")
-            if "镜头" not in vp:
-                parts.append(CAMERA_MAP.get(cam, "镜头保持不动"))
-            parts.append("发丝轻轻飘动, 衣物物理效果, 动漫风格, 流畅动画")
+            parts.append(vp or "subtle character animation, gentle breathing, slight weight shift")
+            if "camera" not in vp.lower():
+                parts.append(CAMERA_MAP.get(cam, "camera holds steady"))
+            parts.append("hair sways gently, cloth physics, anime style, smooth animation")
             motion_prompt = ", ".join(parts)
 
             kling_dur = str(max(KLING_MIN_DURATION, min(KLING_MAX_DURATION, shot_duration)))
@@ -768,74 +777,86 @@ class NarrationMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                      "camera_movement": "zoom_in"}]
 
     def _build_storyboard_prompt(self, duration):
-        return f"""你是一位顶级短剧导演兼编剧，擅长将小说文本改编为"解说类漫剧"短视频分镜。
+        return f"""# Role: 顶级漫剧导演兼编剧
 
-## 你的任务
-将原文改编为一部约 {duration} 秒的竖屏短视频分镜脚本。这是"旁白驱动"的漫剧——观众通过旁白听故事，画面配合营造氛围。
+# Task: 将小说片段改编为 {duration} 秒的竖屏短视频分镜JSON脚本。
 
-## 核心架构：叙事段 + 子镜头
-每个"叙事段"(segment) 包含：
-- 一段旁白（20-30字），连续播放
-- 2-3个子镜头(sub_shots)，每个子镜头5秒，用不同景别和角度切换
+# Rules
 
-## 旁白写作（最核心）
-1. **保留原文精华**：经典对话、内心独白、氛围描写必须保留或改编进旁白
-2. **讲故事而非描述画面**：不要"她走进大厅"，要"苏家破产，千金沦为秘书，她低头穿过嘲讽的目光"
-3. **融入关键对话**：原文对话自然融入
-4. **情感层次丰富**：每段旁白都有明确的情感基调
-5. **每段旁白严格控制在20-30个汉字**
+## 1. 整体结构
+4-5个叙事段(segment)，每段包含2-3个子镜头（相邻镜头景别必须跳切，如特写接全景）。
+子镜头数量 = ceil(估算TTS时长 / 5)，通常2个。估算TTS时长 ≈ ceil(字数/3) + 1。
 
-## 子镜头规则
-1. 子镜头数量 = ceil(估算TTS时长 / 5)，通常2个
-2. 估算TTS时长 ≈ ceil(字数/3) + 1
-3. 相邻子镜头景别必须不同
-4. 每个子镜头只描述5秒能完成的小动作
+## 2. 旁白(narration_text)
+- 每句20-30字，纯推演剧情与对话，绝不描述画面内容
+- 保留原文精华：经典对话、内心独白、氛围描写必须融入
+- 情感层次丰富，每段有明确情感基调
 
-## 情绪标注
-- happy/sad/angry/fearful/surprised/calm/whisper
+## 3. 角色(Character)
+- appearance_prompt: 冻结中文外貌标签（发色+发型+瞳色+肤色+体型+服装+饰品）
+- 色彩丰富，避免全黑灰。男性必须强调"高大威严的成年男性"
 
-## 角色设定
-1. appearance_prompt: 冻结中文外貌标签（发色+发型+瞳色+肤色+体型+服装+饰品）
-2. 色彩丰富，避免全黑灰
-3. 男性强调"高大威严的成年男性"
+## 4. 画面(video_prompt) —— 极简原则
+- 使用英文，仅包含"主体动作"+"高级运镜描述"
+- 严禁重复描述外貌和背景（视频生成时通过参考图注入）
+- 双人同框必须分别描述两人动作
+- 每个子镜头只有5秒，动作幅度要小且有起止
 
-## video_prompt 规则
-只描述动作和镜头运动，禁止外貌和场景描述。
-- ✅ "女子缓缓转头，眼中泛起泪光，镜头缓慢推近"
-- ❌ "长黑发的女子在办公室里转头"
+## 5. 镜头语言(Camera Motion)
+必须根据当前剧情情绪，从以下运镜中选择，并在 video_prompt 中用英文高级描述：
+- [推镜 push_in]: Camera pushes in forward — 压缩空间强化焦点（情绪爆发/特写）
+- [拉镜 pull_back]: Camera pulls back slowly — 展场景，环境叙事感（交代背景/孤独感）
+- [移镜 pan]: Camera pans sideways — 平行视角扫景（展示全貌/时间流逝）
+- [跟镜 tracking]: Camera tracks the subject — 捕捉主体轨迹（跟随运动）
+- [环绕 orbit]: Camera orbits around — 360°沉浸氛围（高光时刻/对峙）
+- [固定 static]: Camera holds steady — 稳定安静（客观叙事/内心独白）
 
-**双人镜头必须描述每个角色的动作。**
+## 6. 情绪标注(emotion)
+happy / sad / angry / fearful / surprised / calm / whisper
 
-## 输出格式
-严格JSON，所有prompt字段均使用中文：
+# Output Format
+严格且仅输出JSON，字段名必须完全一致：
 {{{{
   "title": "标题",
   "character_profiles": [
-    {{{{ "char_id": "char_xxx", "name": "名", "gender": "female",
-      "appearance": "概述", "appearance_prompt": "冻结标签" }}}}
+    {{{{ "char_id": "char_001", "name": "角色名", "gender": "female",
+      "appearance": "中文外貌概述",
+      "appearance_prompt": "冻结中文外貌标签，极其详细" }}}}
   ],
   "scene_backgrounds": [
-    {{{{ "scene_id": "scene_xxx", "name": "场景名",
-      "scene_prompt": "描述，以'漫画风格，动漫背景，无人物'结尾" }}}}
+    {{{{ "scene_id": "scene_001", "name": "场景名",
+      "scene_prompt": "中文场景描述，以'漫画风格，动漫背景，无人物'结尾" }}}}
   ],
   "segments": [
     {{{{
-      "segment_number": 1, "scene_id": "scene_xxx",
-      "characters_in_shot": ["char_xxx"],
-      "narration_text": "20-30字旁白", "emotion": "sad",
-      "scene_description": "场景描述",
-      "image_prompt": "杰作, 4K, 动漫风格, ...",
+      "segment_number": 1,
+      "scene_id": "scene_001",
+      "characters_in_shot": ["char_001"],
+      "narration_text": "20-30字旁白",
+      "emotion": "sad",
+      "scene_description": "中文场景描述",
+      "image_prompt": "杰作, 4K, 动漫风格, 角色外貌+姿态+场景+光线",
       "sub_shots": [
-        {{{{"shot_type": "中景", "video_prompt": "...", "camera_movement": "tracking"}}}},
-        {{{{"shot_type": "特写", "video_prompt": "...", "camera_movement": "zoom_in"}}}}
+        {{{{
+          "shot_type": "full shot",
+          "video_prompt": "English: subject action + camera motion (e.g. The woman walks forward quickly, camera tracks the subject from the side)",
+          "camera_movement": "tracking"
+        }}}},
+        {{{{
+          "shot_type": "extreme close-up",
+          "video_prompt": "English: subject action + camera motion",
+          "camera_movement": "push_in"
+        }}}}
       ]
     }}}}
   ]
 }}}}
 
-## 约束
+# Constraints
 1. 4-5个叙事段，每段2-3个子镜头
 2. 总子镜头数 × 5秒 ≈ {duration}s
-3. 旁白 20-30 字
-4. video_prompt 纯动作（中文）
-5. 只输出JSON"""
+3. narration_text 20-30字中文，讲故事不描述画面
+4. video_prompt 英文，极简（动作+运镜），禁止外貌/场景描述
+5. camera_movement 从 push_in/pull_back/pan/tracking/orbit/static 中选择
+6. shot_type 使用英文景别：extreme close-up / close-up / medium shot / full shot / wide shot
+7. 只输出JSON"""
