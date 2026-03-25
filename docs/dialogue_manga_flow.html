@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>对话漫剧工作流 — 详细流程文档</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(90deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--text-muted); margin-bottom: 2rem; font-size: 0.95rem; }
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  .stage-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+  }
+  .connector {
+    width: 2px;
+    height: 32px;
+    background: var(--border);
+    margin: 0 auto;
+    position: relative;
+  }
+  .connector::after {
+    content: '▼';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: var(--border);
+    font-size: 10px;
+  }
+  .stage-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .stage-num {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+  .stage-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+  }
+  .stage-name {
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: 0.85rem;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-left: 8px;
+  }
+  .badge-llm { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .badge-img { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-video { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .badge-audio { background: rgba(247,120,186,0.15); color: var(--pink); }
+  .badge-ffmpeg { background: rgba(210,153,34,0.15); color: var(--orange); }
+
+  .s1 .stage-num { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .s2 .stage-num { background: rgba(63,185,80,0.2); color: var(--green); }
+  .s3 .stage-num { background: rgba(247,120,186,0.2); color: var(--pink); }
+  .s4 .stage-num { background: rgba(63,185,80,0.2); color: var(--green); }
+  .s5 .stage-num { background: rgba(63,185,80,0.2); color: var(--green); }
+  .s6 .stage-num { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .s7 .stage-num { background: rgba(247,120,186,0.2); color: var(--pink); }
+  .s8 .stage-num { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .s9 .stage-num { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .s10 .stage-num { background: rgba(210,153,34,0.2); color: var(--orange); }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .detail-box {
+    background: rgba(0,0,0,0.3);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+  .detail-box strong { color: var(--text); display: block; margin-bottom: 4px; }
+  .detail-box p, .detail-box ul { color: var(--text-muted); }
+  .detail-box ul { padding-left: 16px; }
+  .detail-box li { margin-bottom: 2px; }
+  .detail-box.full { grid-column: 1 / -1; }
+  code {
+    background: rgba(110,118,129,0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.82rem;
+    color: var(--accent);
+  }
+  .flow-arrow {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 4px 0;
+  }
+  .decision-box {
+    background: rgba(210,153,34,0.1);
+    border: 1px dashed var(--orange);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    margin-top: 8px;
+  }
+  .decision-box strong { color: var(--orange); }
+
+  .section-divider {
+    text-align: center;
+    color: var(--text-muted);
+    margin: 2rem 0 1rem;
+    font-size: 0.9rem;
+    letter-spacing: 2px;
+  }
+  .section-divider::before, .section-divider::after {
+    content: '────────';
+    margin: 0 12px;
+  }
+
+  .reroll-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+  }
+  .reroll-table th, .reroll-table td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 0.85rem;
+  }
+  .reroll-table th {
+    background: rgba(0,0,0,0.3);
+    color: var(--text);
+  }
+  .reroll-table td { color: var(--text-muted); }
+
+  .agent-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .agent-chip {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: 1px solid;
+  }
+  .agent-chip.llm { border-color: var(--accent); color: var(--accent); }
+  .agent-chip.img { border-color: var(--green); color: var(--green); }
+  .agent-chip.vid { border-color: var(--purple); color: var(--purple); }
+  .agent-chip.aud { border-color: var(--pink); color: var(--pink); }
+  .agent-chip.tool { border-color: var(--orange); color: var(--orange); }
+
+  @media (max-width: 640px) {
+    body { padding: 1rem; }
+    .detail-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div style="max-width:960px; margin:0 auto;">
+
+<h1>对话漫剧工作流</h1>
+<p class="subtitle">dialogue_manga — 多角色对话驱动的漫剧推广视频生成 · 10 Stage Pipeline</p>
+
+<!-- Agent Team -->
+<div class="stage-card" style="margin-bottom: 2rem; border-color: var(--accent);">
+  <div class="stage-header">
+    <div style="font-size:1.3rem;">🤖</div>
+    <div>
+      <div class="stage-title">Agent 团队</div>
+      <div class="stage-name">8 个 AI 服务协作</div>
+    </div>
+  </div>
+  <div class="agent-row">
+    <span class="agent-chip llm">Qwen 3.5-plus — LLM</span>
+    <span class="agent-chip img">Jimeng T2I — 角色图</span>
+    <span class="agent-chip img">Gemini 3.1 Flash — 场景/宫格</span>
+    <span class="agent-chip vid">Kling V3 — 视频生成</span>
+    <span class="agent-chip vid">Kling V3 — Lip-sync</span>
+    <span class="agent-chip aud">MiniMax — TTS</span>
+    <span class="agent-chip aud">ElevenLabs — BGM</span>
+    <span class="agent-chip tool">FFmpeg + PIL — 后处理</span>
+  </div>
+</div>
+
+<div class="pipeline">
+
+<!-- Stage 1 -->
+<div class="stage-card s1">
+  <div class="stage-header">
+    <div class="stage-num">1</div>
+    <div>
+      <div class="stage-title">分镜剧本生成 <span class="badge badge-llm">LLM</span></div>
+      <div class="stage-name">stage_storyboard</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>输入</strong>
+      <p>小说文本（≤15,000 字）</p>
+    </div>
+    <div class="detail-box">
+      <strong>输出</strong>
+      <p><code>storyboard.json</code></p>
+    </div>
+    <div class="detail-box full">
+      <strong>处理流程</strong>
+      <ul>
+        <li>LLM 阅读小说文本，识别"有效冲突单元"</li>
+        <li>每个 unit 包含：title / core_conflict / emotion_tone / key_scenes / script</li>
+        <li>script 是 dialogue + action 列表，每条标注说话角色</li>
+        <li>同时输出 character_profiles：char_id / appearance_prompt / voice_trait</li>
+        <li>校验：<code>_validated_chat_json()</code> 检查 units + character_profiles 字段，最多重试 3 次</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 2 -->
+<div class="stage-card s2">
+  <div class="stage-header">
+    <div class="stage-num">2</div>
+    <div>
+      <div class="stage-title">角色三视图参考图 <span class="badge badge-img">Jimeng T2I</span></div>
+      <div class="stage-name">stage_char_refs</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>规格</strong>
+      <p>1472 × 832 px · 白色背景 · 三视图<br>(正面+侧面+背面) · 动漫风格</p>
+    </div>
+    <div class="detail-box">
+      <strong>输出</strong>
+      <p><code>characters/charref_{cid}_v{n}.png</code></p>
+      <p>注册到 CandidateManager: <code>char_ref:{cid}</code></p>
+    </div>
+    <div class="detail-box full">
+      <strong>Prompt 构成</strong>
+      <p>杰作 + 动漫风格 + 角色设定图 + 白色背景 + 三视图 + gender_hint + appearance_prompt + 全身立绘 + 无文字无水印</p>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 3 -->
+<div class="stage-card s3">
+  <div class="stage-header">
+    <div class="stage-num">3</div>
+    <div>
+      <div class="stage-title">角色音色库 <span class="badge badge-llm">LLM</span> <span class="badge badge-audio">MiniMax</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
+      <div class="stage-name">stage_char_voices</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>Step 1: LLM 音色匹配</strong>
+      <ul>
+        <li>输入：角色 voice_trait + 21 种 MiniMax 音色描述</li>
+        <li>输出：voice_id / emotion / intro_text</li>
+        <li>保存至 <code>voice_map.json</code></li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Step 2: TTS 生成</strong>
+      <ul>
+        <li>MiniMax TTS 生成自我介绍台词 (speed=0.9)</li>
+        <li>主音色：<code>voice_{cid}_v{n}.mp3</code></li>
+        <li>回忆版：FFmpeg aecho 混响 → <code>voice_{cid}_memory_v{n}.mp3</code></li>
+      </ul>
+    </div>
+    <div class="detail-box full">
+      <strong>回忆混响参数</strong>
+      <p><code>aecho=0.8:0.7:40|60:0.3|0.2, highpass=f=80, lowpass=f=6000</code></p>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 4 -->
+<div class="stage-card s4">
+  <div class="stage-header">
+    <div class="stage-num">4</div>
+    <div>
+      <div class="stage-title">场景参考图 <span class="badge badge-img">Gemini</span></div>
+      <div class="stage-name">stage_scene_refs</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>特点</strong>
+      <p>带角色参考图输入，保持角色一致性</p>
+      <p>基于 key_scenes 的 location + description</p>
+    </div>
+    <div class="detail-box">
+      <strong>输出</strong>
+      <p><code>scenes/scene_u{n}_s{n}_v{n}.png</code></p>
+      <p>注册: <code>scene_ref:u{n}_s{n}</code></p>
+    </div>
+    <div class="detail-box full">
+      <strong>参考图传递</strong>
+      <p>将本 unit 涉及的角色三视图作为 Gemini 的 <code>ref_images</code> 输入，附带角色名和外貌标签</p>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 5 -->
+<div class="stage-card s5">
+  <div class="stage-header">
+    <div class="stage-num">5</div>
+    <div>
+      <div class="stage-title">4×4 宫格分镜图 <span class="badge badge-llm">LLM</span> <span class="badge badge-img">Gemini 4K</span></div>
+      <div class="stage-name">stage_storyboard_grids</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>Step A: LLM 生成 16 shots</strong>
+      <ul>
+        <li>每个 shot: 英文关键词 prompt (20-30 词)</li>
+        <li>Tags 格式: [景别] + [主体动作] + [环境] + [风格]</li>
+        <li>节奏规则：每 3-4 镜头景别跳变</li>
+        <li><code>_strip_shot_labels()</code> 去除景别缩写避免渲染文字</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Step B: Gemini 生成宫格图</strong>
+      <ul>
+        <li>4K 输出: 5504 × 3072 (16:9)</li>
+        <li>参考图: 角色三视图 + 场景参考图</li>
+        <li>Prompt 包含: 180° 规则 / 30° 规则 / 节奏规则</li>
+        <li>输出: <code>grids/grid_u{n}_v{n}.png</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 6 -->
+<div class="stage-card s6">
+  <div class="stage-header">
+    <div class="stage-num">6</div>
+    <div>
+      <div class="stage-title">切图 + 视频分镜指令 <span class="badge badge-ffmpeg">PIL</span> <span class="badge badge-llm">LLM</span></div>
+      <div class="stage-name">stage_video_prompts</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>Step A: PIL 4×4 切图</strong>
+      <ul>
+        <li>5504×3072 ÷ 4 = 每格 1376×768</li>
+        <li>16 帧注册到 CandidateManager</li>
+        <li><code>frames/u{n}/frame_{01-16}.png</code></li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Step B: LLM 生成 15 段指令</strong>
+      <ul>
+        <li>相邻两帧组成一段 (帧N → 帧N+1)</li>
+        <li>每段: is_dialogue / is_memory / dialogue / facing</li>
+        <li>时长估算: 台词=字数÷4s, 动作=3-5s</li>
+        <li>输出: <code>video_segments_u{n}.json</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 7 -->
+<div class="stage-card s7">
+  <div class="stage-header">
+    <div class="stage-num">7</div>
+    <div>
+      <div class="stage-title">对话 TTS + 时长校准 <span class="badge badge-audio">MiniMax</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
+      <div class="stage-name">stage_dialogue_tts</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>处理流程</strong>
+      <ul>
+        <li>仅处理 <code>is_dialogue=true</code> 的段</li>
+        <li>按 char_id 查询 voice_map 获取 voice_id + emotion</li>
+        <li>去除括号注释后调用 MiniMax TTS</li>
+        <li>回忆场景: 额外 FFmpeg aecho 加混响</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>时长校准公式</strong>
+      <p style="font-family:monospace; color:var(--accent); font-size:0.9rem; padding:8px 0;">
+        final_duration = max(estimated, ⌈tts_duration⌉, 3)
+      </p>
+      <ul>
+        <li>无 +1s buffer — 精确对齐</li>
+        <li>非台词段: final = max(estimated, 3)</li>
+        <li>回写 tts_path / tts_duration / final_duration 到 JSON</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 8 -->
+<div class="stage-card s8">
+  <div class="stage-header">
+    <div class="stage-num">8</div>
+    <div>
+      <div class="stage-title">视频生成 <span class="badge badge-video">Kling V3</span></div>
+      <div class="stage-name">stage_video_gen</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>Plan C: 首帧 Only</strong>
+      <ul>
+        <li>只用 start_frame，无 image_tail</li>
+        <li>全部段可并行生成，无累积误差</li>
+        <li>硬切过渡，不加 crossfade</li>
+        <li>Kling V3 image2video + subject_reference</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Lip-sync 流程</strong>
+      <ul>
+        <li>image2video 完成后获取 video_id</li>
+        <li>POST <code>/v1/videos/lip-sync</code></li>
+        <li>audio2video 模式, audio_file = base64(mp3)</li>
+        <li>轮询等待完成 (最长 600s)</li>
+        <li>失败时降级为原始视频</li>
+      </ul>
+    </div>
+    <div class="decision-box">
+      <strong>Lip-sync 决策树</strong><br>
+      <code>is_dialogue</code> ?
+      → 否: 直接下载原始视频<br>
+      → 是: <code>is_memory</code> ?
+        → 是: 跳过 lip-sync (回忆场景)<br>
+        → 否: <code>"背" in facing</code> ?
+          → 是: 跳过 lip-sync (背对镜头)<br>
+          → 否: <strong style="color:var(--green);">执行 lip-sync</strong>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 9 -->
+<div class="stage-card s9">
+  <div class="stage-header">
+    <div class="stage-num">9</div>
+    <div>
+      <div class="stage-title">字幕压制 <span class="badge badge-ffmpeg">FFmpeg</span></div>
+      <div class="stage-name">stage_subtitle_burn</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>字幕样式</strong>
+      <ul>
+        <li>角色名: <span style="color:#FFD700;">■</span> #FFD700 金色, 22px, 黑色描边 1.5px</li>
+        <li>台词: <span style="color:#fff;">■</span> 白色, 28px, 黑色描边 2px</li>
+        <li>位置: 底部居中 (y=h-th-60 / y=h-th-95)</li>
+        <li>字体: PingFang SC (macOS 内置)</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>处理范围</strong>
+      <ul>
+        <li>仅 is_dialogue=true 的段</li>
+        <li>去除括号注释后显示</li>
+        <li>非台词段保持原视频不变</li>
+        <li>输出: <code>u{n}_seg{nn}_subtitled.mp4</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="connector"></div>
+
+<!-- Stage 10 -->
+<div class="stage-card s10">
+  <div class="stage-header">
+    <div class="stage-num">10</div>
+    <div>
+      <div class="stage-title">组装输出 <span class="badge badge-ffmpeg">FFmpeg</span> <span class="badge badge-audio">ElevenLabs</span></div>
+      <div class="stage-name">stage_assembly</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>Step A: 帧率统一</strong>
+      <ul>
+        <li>全部 clip → 1280×720 @30fps</li>
+        <li>Kling image2video 输出 24fps</li>
+        <li>Kling lip-sync 输出 30fps</li>
+        <li>无音频的 clip 添加静音轨</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Step B: 拼接</strong>
+      <ul>
+        <li>字幕版优先，无字幕则用原版</li>
+        <li>FFmpeg concat demuxer</li>
+        <li>硬切，无过渡效果</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>Step C: BGM</strong>
+      <ul>
+        <li>LLM 生成音乐 prompt (50-80 词英文)</li>
+        <li>ElevenLabs Music API 生成 BGM</li>
+        <li>BGM volume=0.15, 淡入 2s, 淡出 2s</li>
+        <li>amix 混合：原始音频 + BGM</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>最终输出</strong>
+      <p><code>videos/u{n}_output.mp4</code></p>
+      <p>1280×720 · 30fps · AAC 128k</p>
+    </div>
+  </div>
+</div>
+
+</div><!-- pipeline -->
+
+<!-- Reroll Section -->
+<div class="section-divider">抽卡 / REROLL</div>
+
+<div class="stage-card" style="margin-bottom:1rem;">
+  <div class="stage-header">
+    <div style="font-size:1.3rem;">🎲</div>
+    <div>
+      <div class="stage-title">Reroll 抽卡体系</div>
+      <div class="stage-name">op_reroll_*</div>
+    </div>
+  </div>
+  <table class="reroll-table">
+    <thead>
+      <tr><th>目标</th><th>方法</th><th>策略</th><th>版本上限</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>宫格帧</td>
+        <td><code>op_reroll_frame</code></td>
+        <td>FIFO 切换备选 → 重生成整张宫格 → 切 16 帧，目标帧自动选中，其他帧作为备选</td>
+        <td>3</td>
+      </tr>
+      <tr>
+        <td>视频段</td>
+        <td><code>op_reroll_video_segment</code></td>
+        <td>重新 Kling V3 image2video + lip-sync 全流程</td>
+        <td>无限制</td>
+      </tr>
+      <tr>
+        <td>对话 TTS</td>
+        <td><code>op_reroll_dialogue_tts</code></td>
+        <td>重新 MiniMax TTS，支持 voice_id 覆写，回忆场景自动加混响</td>
+        <td>无限制</td>
+      </tr>
+      <tr>
+        <td>角色参考图</td>
+        <td><code>op_reroll_char_ref</code></td>
+        <td>Jimeng T2I 重新生成三视图</td>
+        <td>无限制</td>
+      </tr>
+      <tr>
+        <td>场景背景</td>
+        <td><code>op_reroll_scene_bg</code></td>
+        <td>重新生成场景参考图</td>
+        <td>无限制</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Review Section -->
+<div class="section-divider">审查 / REVIEW</div>
+
+<div class="stage-card" style="margin-bottom:1rem;">
+  <div class="stage-header">
+    <div style="font-size:1.3rem;">🔍</div>
+    <div>
+      <div class="stage-title">Review 审查操作</div>
+      <div class="stage-name">op_review_*</div>
+    </div>
+  </div>
+  <table class="reroll-table">
+    <thead>
+      <tr><th>操作</th><th>返回内容</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>review storyboard</code></td><td>所有 units 摘要 (title/conflict/emotion/characters/dialogue_count) + character_profiles</td></tr>
+      <tr><td><code>review status</code></td><td>10 个 stage 完成状态 + 各类资产数量统计</td></tr>
+      <tr><td><code>review characters</code></td><td>角色三视图路径 + 音色信息 (voice_id/emotion/samples)</td></tr>
+      <tr><td><code>review unit {n}</code></td><td>指定 unit 的 15 段分镜详情 (帧路径/视频路径/TTS路径/时长)</td></tr>
+      <tr><td><code>review assets {type}</code></td><td>指定类型的全部资产列表 (scene_refs/grids/frames/videos)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Architecture -->
+<div class="section-divider">架构</div>
+
+<div class="stage-card">
+  <div class="stage-header">
+    <div style="font-size:1.3rem;">🏗️</div>
+    <div>
+      <div class="stage-title">系统架构</div>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-box">
+      <strong>工作流引擎</strong>
+      <ul>
+        <li><code>BaseWorkflow</code> — stage 执行框架</li>
+        <li><code>InteractiveOpsMixin</code> — 通用交互操作</li>
+        <li><code>@register_workflow</code> — 模板注册</li>
+        <li><code>CandidateManager</code> — 资产版本管理</li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>接入方式</strong>
+      <ul>
+        <li><strong>CLI:</strong> <code>scripts/e2e_v11b.py</code></li>
+        <li><strong>REST API:</strong> <code>app/api/v1/workflows.py</code></li>
+        <li><strong>Python:</strong> <code>get_workflow("dialogue_manga")</code></li>
+      </ul>
+    </div>
+    <div class="detail-box">
+      <strong>断点恢复</strong>
+      <p>每个 stage 检查已有输出文件，跳过已完成的步骤。<code>CandidateManager</code> 跟踪所有资产版本和选中状态。<code>stop_after_stage</code> 支持分段执行。</p>
+    </div>
+    <div class="detail-box">
+      <strong>LLM 校验</strong>
+      <p><code>_validated_chat_json()</code> 统一校验 LLM 输出：检查必需字段 + 列表字段 + 列表长度，最多重试 3 次，失败抛出 RuntimeError。</p>
+    </div>
+  </div>
+</div>
+
+</div><!-- max-width container -->
+</body>
+</html>

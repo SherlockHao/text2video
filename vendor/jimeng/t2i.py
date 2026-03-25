@@ -1,10 +1,12 @@
 """
 即梦AI - 图片生成 4.0 (文生图)
-API Explorer: https://api.volcengine.com/api-docs/view?serviceCode=cv&version=2024-06-06&action=JimengT2IV40SubmitTask
 
-异步调用流程:
-1. JimengT2IV40SubmitTask 提交任务 → 获取 task_id
-2. JimengT2IV40GetResult  轮询结果 → 获取生成的图片
+异步调用流程 (正式版通用异步接口):
+1. CVSync2AsyncSubmitTask 提交任务 → 获取 task_id
+2. CVSync2AsyncGetResult  轮询结果 → 获取生成的图片
+
+注意: 试用版使用 JimengT2IV40SubmitTask (Version=2024-06-06)，
+      正式版使用 CVSync2AsyncSubmitTask (Version=2022-08-31)。
 """
 
 import base64
@@ -15,7 +17,9 @@ import requests
 
 from .service import call_api, create_service, poll_result
 
-ACTIONS = ["JimengT2IV40SubmitTask", "JimengT2IV40GetResult"]
+SUBMIT_ACTION = "CVSync2AsyncSubmitTask"
+GET_ACTION = "CVSync2AsyncGetResult"
+ACTIONS = [SUBMIT_ACTION, GET_ACTION]
 
 
 def submit_t2i_task(
@@ -42,7 +46,7 @@ def submit_t2i_task(
     print(f"  prompt: {prompt}")
     print(f"  尺寸: {width}x{height}")
 
-    result = call_api(vs, "JimengT2IV40SubmitTask", form)
+    result = call_api(vs, SUBMIT_ACTION, form)
     code = result.get("code", -1)
     print(f"  code={code}, message={result.get('message', '')}")
 
@@ -71,7 +75,7 @@ def get_t2i_result(task_id: str, max_wait: int = 120) -> dict | None:
             return bool(rd.get("image_urls") or rd.get("binary_data_base64"))
         return False
 
-    return poll_result(vs, "JimengT2IV40GetResult", form, max_wait=max_wait, check_done=check_done)
+    return poll_result(vs, GET_ACTION, form, max_wait=max_wait, check_done=check_done)
 
 
 def save_images(data: dict, output_dir: str = ".", prefix: str = "jimeng_t2i") -> list[str]:

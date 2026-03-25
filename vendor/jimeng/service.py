@@ -20,7 +20,7 @@ def create_service(actions: list[str]) -> VisualService:
     for action in actions:
         vs.api_info[action] = ApiInfo(
             "POST", "/",
-            {"Action": action, "Version": "2024-06-06"},
+            {"Action": action, "Version": "2022-08-31"},
             {}, {},
         )
     return vs

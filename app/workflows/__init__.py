@@ -12,3 +12,4 @@ from .candidates import CandidateManager
 
 # 导入模板以触发注册
 from .templates import narration_manga  # noqa: F401
+from .templates import dialogue_manga   # noqa: F401
