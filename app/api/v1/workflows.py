@@ -2,6 +2,8 @@
 Workflow API — 工作流模板管理和执行 + 交互操作（review/reroll）
 """
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -96,6 +98,9 @@ async def run_workflow(req: WorkflowRunRequest):
 # Review endpoints
 # ================================================================
 
+ALLOWED_OUTPUT_BASE = os.path.abspath("e2e_output")
+
+
 def _get_wf(workflow: str):
     try:
         return get_workflow(workflow)
@@ -103,12 +108,27 @@ def _get_wf(workflow: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _safe_output_dir(output_dir: str) -> str:
+    """校验 output_dir 防止路径遍历，返回安全的绝对路径。"""
+    resolved = os.path.abspath(output_dir)
+    if not resolved.startswith(ALLOWED_OUTPUT_BASE):
+        raise HTTPException(status_code=400, detail=f"output_dir must be under {ALLOWED_OUTPUT_BASE}")
+    return resolved
+
+
+def _require_op(wf, method_name: str):
+    """检查 workflow 是否支持指定操作。"""
+    if not hasattr(wf, method_name):
+        raise HTTPException(status_code=400,
+                            detail=f"Workflow '{wf.name}' does not support '{method_name}'")
+
+
 @router.get("/{workflow}/review/storyboard")
 async def review_storyboard(workflow: str,
                              output_dir: str = Query(..., description="工作流输出目录")):
     """返回分镜脚本摘要。"""
     wf = _get_wf(workflow)
-    return wf.op_review_storyboard(output_dir)
+    return wf.op_review_storyboard(_safe_output_dir(output_dir))
 
 
 @router.get("/{workflow}/review/status")
@@ -116,7 +136,7 @@ async def review_status(workflow: str,
                         output_dir: str = Query(..., description="工作流输出目录")):
     """返回整体进度状态。"""
     wf = _get_wf(workflow)
-    return wf.op_review_status(output_dir)
+    return wf.op_review_status(_safe_output_dir(output_dir))
 
 
 @router.get("/{workflow}/review/characters")
@@ -124,7 +144,8 @@ async def review_characters(workflow: str,
                             output_dir: str = Query(..., description="工作流输出目录")):
     """返回角色资产（参考图 + 音色信息）。"""
     wf = _get_wf(workflow)
-    return wf.op_review_characters(output_dir)
+    _require_op(wf, "op_review_characters")
+    return wf.op_review_characters(_safe_output_dir(output_dir))
 
 
 @router.get("/{workflow}/review/unit/{unit_number}")
@@ -132,7 +153,8 @@ async def review_unit(workflow: str, unit_number: int,
                       output_dir: str = Query(..., description="工作流输出目录")):
     """返回某个 unit 的详细信息。"""
     wf = _get_wf(workflow)
-    return wf.op_review_unit(output_dir, unit_number)
+    _require_op(wf, "op_review_unit")
+    return wf.op_review_unit(_safe_output_dir(output_dir), unit_number)
 
 
 @router.get("/{workflow}/review/assets")
@@ -141,7 +163,7 @@ async def review_assets(workflow: str,
                         output_dir: str = Query(..., description="工作流输出目录")):
     """返回指定类型的资产列表。"""
     wf = _get_wf(workflow)
-    return wf.op_review_assets(output_dir, asset_type)
+    return wf.op_review_assets(_safe_output_dir(output_dir), asset_type)
 
 
 # ================================================================
@@ -155,7 +177,7 @@ async def reroll_frame(workflow: str, req: RerollFrameRequest,
     wf = _get_wf(workflow)
     if not hasattr(wf, "op_reroll_frame"):
         raise HTTPException(status_code=400, detail=f"Workflow {workflow} does not support frame reroll")
-    return wf.op_reroll_frame(output_dir, req.unit_number, req.frame_number)
+    return wf.op_reroll_frame(_safe_output_dir(output_dir), req.unit_number, req.frame_number)
 
 
 @router.post("/{workflow}/reroll/video-segment")
@@ -165,7 +187,7 @@ async def reroll_video_segment(workflow: str, req: RerollVideoSegmentRequest,
     wf = _get_wf(workflow)
     if not hasattr(wf, "op_reroll_video_segment"):
         raise HTTPException(status_code=400, detail=f"Workflow {workflow} does not support video-segment reroll")
-    return wf.op_reroll_video_segment(output_dir, req.unit_number, req.segment_number)
+    return wf.op_reroll_video_segment(_safe_output_dir(output_dir), req.unit_number, req.segment_number)
 
 
 @router.post("/{workflow}/reroll/dialogue-tts")
@@ -175,7 +197,7 @@ async def reroll_dialogue_tts(workflow: str, req: RerollDialogueTTSRequest,
     wf = _get_wf(workflow)
     if not hasattr(wf, "op_reroll_dialogue_tts"):
         raise HTTPException(status_code=400, detail=f"Workflow {workflow} does not support dialogue-tts reroll")
-    return wf.op_reroll_dialogue_tts(output_dir, req.unit_number, req.segment_number,
+    return wf.op_reroll_dialogue_tts(_safe_output_dir(output_dir), req.unit_number, req.segment_number,
                                      voice_id=req.voice_id)
 
 
@@ -188,7 +210,7 @@ async def reroll_char_ref(workflow: str, req: RerollCharRefRequest,
                           output_dir: str = Query(..., description="工作流输出目录")):
     """重新生成角色参考图。"""
     wf = _get_wf(workflow)
-    return wf.op_reroll_char_ref(output_dir, req.char_id)
+    return wf.op_reroll_char_ref(_safe_output_dir(output_dir), req.char_id)
 
 
 @router.post("/{workflow}/reroll/scene-bg")
@@ -196,4 +218,4 @@ async def reroll_scene_bg(workflow: str, req: RerollSceneBgRequest,
                           output_dir: str = Query(..., description="工作流输出目录")):
     """重新生成场景背景图。"""
     wf = _get_wf(workflow)
-    return wf.op_reroll_scene_bg(output_dir, req.scene_id)
+    return wf.op_reroll_scene_bg(_safe_output_dir(output_dir), req.scene_id)
