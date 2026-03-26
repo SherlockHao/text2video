@@ -36,6 +36,8 @@ from app.workflows.templates._shared import (
     _strip_shot_labels,
     _detect_grid_panels,
     _validated_chat_json,
+    _preprocess_bgm,
+    _measure_mean_volume,
 )
 from vendor.qwen.client import chat_json
 from vendor.jimeng.t2i import generate_image
@@ -330,30 +332,6 @@ def _download_with_retry(url, path, retries=3, timeout=180):
             time.sleep(5 * (attempt + 1))
     return False
 
-
-def _measure_mean_volume(file_path, duration=None):
-    """用 ffmpeg volumedetect 测量音频 mean_volume（dB）。"""
-    cmd = ["ffmpeg", "-i", file_path]
-    if duration is not None:
-        cmd += ["-t", str(duration)]
-    cmd += ["-af", "volumedetect", "-f", "null", "-"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    mean_db = -91.0
-    max_db = 0.0
-    for line in r.stderr.split("\n"):
-        if "mean_volume" in line:
-            try:
-                mean_db = float(
-                    line.split("mean_volume:")[1].strip().replace(" dB", ""))
-            except (ValueError, IndexError):
-                pass
-        elif "max_volume" in line:
-            try:
-                max_db = float(
-                    line.split("max_volume:")[1].strip().replace(" dB", ""))
-            except (ValueError, IndexError):
-                pass
-    return mean_db, max_db
 
 
 # ── Workflow ─────────────────────────────────────────────────────
@@ -887,115 +865,146 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # Stage 6: Narration TTS (单旁白 + 时长校准)
     # ================================================================
     def stage_narration_tts(self, ctx: WorkflowContext) -> StageResult:
+        import math
         from app.services.ffmpeg_utils import get_media_duration
+        from vendor.qwen.tts import qwen_tts, QWEN_VOICES
+        from app.workflows.templates._shared import (
+            NARRATION_VOICE_MATCH_SYSTEM_PROMPT,
+        )
 
         os.makedirs(os.path.join(ctx.output_dir, "audio"), exist_ok=True)
 
-        voice_id = ctx.params.get("voice", "female-shaonv")
-        ctx.log(f"  旁白音色: {voice_id}")
+        # ── Step 1: LLM 选择旁白音色 + 生成 instruct 指令 ──
+        voice_config_path = os.path.join(ctx.output_dir, "narration_voice.json")
+        if os.path.exists(voice_config_path):
+            with open(voice_config_path) as f:
+                voice_config = json.load(f)
+            ctx.log(f"  ★ 断点恢复: 旁白音色 {voice_config['voice_id']}")
+        else:
+            # 取剧本完整信息传给 LLM
+            unit = ctx.segments[0] if ctx.segments else {}
+            title = unit.get("title", "")
+            emotion_tone = unit.get("emotion_tone", "悬疑紧张")
+            core_conflict = unit.get("core_conflict", "")
+            ending_hook = unit.get("ending_hook", "")
+            # 提取旁白文本摘要
+            script = unit.get("script", [])
+            narrations = [s["content"] for s in script if s.get("type") == "narration"]
+            narration_preview = " / ".join(narrations[:3])
+            # 角色信息
+            chars_summary = ", ".join(
+                f"{c['name']}({c.get('gender','?')})" for c in ctx.characters[:5]
+            ) if ctx.characters else ""
 
-        async def _gen_all_tts():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
+            voice_config = _validated_chat_json(
+                system_prompt=NARRATION_VOICE_MATCH_SYSTEM_PROMPT,
+                user_prompt=(
+                    f"【剧本标题】{title}\n"
+                    f"【情感基调】{emotion_tone}\n"
+                    f"【核心冲突】{core_conflict}\n"
+                    f"【结尾钩子】{ending_hook}\n"
+                    f"【角色】{chars_summary}\n"
+                    f"【旁白摘要】{narration_preview}\n\n"
+                    f"【可用音色】：\n{json.dumps(QWEN_VOICES, ensure_ascii=False, indent=2)}"
+                ),
+                required_keys=["voice_id", "tts_instructions"],
+                temperature=0.3,
+                max_tokens=512,
+            )
+            with open(voice_config_path, "w", encoding="utf-8") as f:
+                json.dump(voice_config, f, ensure_ascii=False, indent=2)
 
-            for ui, unit in enumerate(ctx.segments):
-                un = unit.get("unit_number", ui + 1)
-                vp_path = os.path.join(
-                    ctx.output_dir, "grids",
-                    f"video_segments_u{un}.json")
-                if not os.path.exists(vp_path):
+        voice_id = voice_config.get("voice_id", "Serena")
+        base_instructions = voice_config.get("tts_instructions", "沉稳专业的旁白叙述风格")
+        ctx.log(f"  旁白音色: {voice_id} (Qwen TTS)")
+        ctx.log(f"  风格指令: {base_instructions}")
+
+        # ── Step 2: 逐段生成 TTS ──
+        for ui, unit in enumerate(ctx.segments):
+            un = unit.get("unit_number", ui + 1)
+            vp_path = os.path.join(
+                ctx.output_dir, "grids",
+                f"video_segments_u{un}.json")
+            if not os.path.exists(vp_path):
+                continue
+
+            with open(vp_path) as f:
+                vp_data = json.load(f)
+            segments = vp_data.get("video_segments", [])
+
+            ctx.log(f"\n  -- 单元 {un}: Narration TTS (Qwen) --")
+            updated = False
+
+            for seg in segments:
+                sn = seg["segment_number"]
+                narration = seg.get("narration_text", "")
+
+                if not narration:
+                    seg["final_duration"] = max(
+                        seg.get("estimated_duration", 3), 3)
                     continue
 
-                with open(vp_path) as f:
-                    vp_data = json.load(f)
-                segments = vp_data.get("video_segments", [])
-
-                ctx.log(f"\n  -- 单元 {un}: Narration TTS --")
-                updated = False
-
-                for seg in segments:
-                    sn = seg["segment_number"]
-                    narration = seg.get("narration_text", "")
-
-                    # 无旁白段：设定最短时长
-                    if not narration:
-                        seg["final_duration"] = max(
-                            seg.get("estimated_duration", 3), 3)
+                # 已有 TTS → 跳过
+                if seg.get("tts_path") and seg.get("final_duration"):
+                    tts_p = seg["tts_path"]
+                    if (os.path.exists(tts_p)
+                            and os.path.getsize(tts_p) > 100):
+                        ctx.log(f"    段{sn}: ★ 已存在")
                         continue
 
-                    # 已有 TTS 且有 final_duration → 跳过
-                    if seg.get("tts_path") and seg.get("final_duration"):
-                        tts_p = seg["tts_path"]
-                        if (os.path.exists(tts_p)
-                                and os.path.getsize(tts_p) > 100):
-                            ctx.log(f"    段{sn}: ★ 已存在")
-                            continue
+                # 根据段落情感微调 instructions
+                seg_emotion = seg.get("emotion", "")
+                if seg_emotion and seg_emotion != "calm":
+                    instructions = f"{base_instructions}，当前段落情感：{seg_emotion}"
+                else:
+                    instructions = base_instructions
 
-                    # 选择情感
-                    emotion = seg.get("emotion", "calm")
-                    valid_emotions = {
-                        "happy", "sad", "angry", "fearful",
-                        "disgusted", "surprised", "calm", "fluent",
-                    }
-                    if emotion == "whisper":
-                        emotion = "calm"
-                    if emotion not in valid_emotions:
-                        emotion = "calm"
+                # 调用 Qwen TTS
+                audio_data = qwen_tts(
+                    text=narration,
+                    voice=voice_id,
+                    instructions=instructions,
+                )
 
-                    # 生成 TTS
-                    job_id = await provider.submit_job({
-                        "text": narration,
-                        "voice_id": voice_id,
-                        "speed": 0.9,
-                        "emotion": emotion,
-                    })
-                    status = await provider.poll_job(job_id)
+                if audio_data:
+                    audio_path = os.path.join(
+                        ctx.output_dir, "audio",
+                        f"u{un}_seg{sn:02d}_narration.wav")
+                    with open(audio_path, "wb") as f:
+                        f.write(audio_data)
 
-                    if status.result_data:
-                        audio_path = os.path.join(
-                            ctx.output_dir, "audio",
-                            f"u{un}_seg{sn:02d}_narration.mp3")
-                        with open(audio_path, "wb") as f:
-                            f.write(status.result_data)
+                    tts_dur = get_media_duration(audio_path)
+                    final_dur = max(
+                        seg.get("estimated_duration", 3),
+                        math.ceil(tts_dur), 3)
 
-                        tts_dur = get_media_duration(audio_path)
-                        final_dur = max(
-                            seg.get("estimated_duration", 3),
-                            math.ceil(tts_dur), 3)
+                    seg["tts_path"] = os.path.abspath(audio_path)
+                    seg["tts_duration"] = tts_dur
+                    seg["final_duration"] = final_dur
+                    updated = True
 
-                        seg["tts_path"] = os.path.abspath(audio_path)
-                        seg["tts_duration"] = tts_dur
-                        seg["final_duration"] = final_dur
-                        updated = True
+                    tts_asset_key = f"narration_tts:u{un}_seg{sn:02d}"
+                    rel = os.path.relpath(audio_path, ctx.output_dir)
+                    if not ctx.candidates.list_candidates(tts_asset_key):
+                        ctx.candidates.register(tts_asset_key, rel)
 
-                        # 注册到 CandidateManager
-                        tts_asset_key = (
-                            f"narration_tts:u{un}_seg{sn:02d}")
-                        rel = os.path.relpath(audio_path, ctx.output_dir)
-                        if not ctx.candidates.list_candidates(
-                                tts_asset_key):
-                            ctx.candidates.register(tts_asset_key, rel)
+                    ctx.log(f"    段{sn}: ✓ TTS={tts_dur:.1f}s → "
+                            f"final={final_dur}s")
+                else:
+                    seg["final_duration"] = max(
+                        seg.get("estimated_duration", 3), 3)
+                    ctx.log(f"    段{sn}: ✗ TTS 失败")
 
-                        ctx.log(f"    段{sn}: ✓ TTS={tts_dur:.1f}s → "
-                                f"final={final_dur}s "
-                                f"(emotion={emotion})")
-                    else:
-                        seg["final_duration"] = max(
-                            seg.get("estimated_duration", 3), 3)
-                        ctx.log(f"    段{sn}: ✗ TTS 失败")
+                time.sleep(0.3)  # rate limit
 
-                    await asyncio.sleep(0.5)
+            if updated:
+                with open(vp_path, "w", encoding="utf-8") as f:
+                    json.dump(vp_data, f, ensure_ascii=False, indent=2)
 
-                # 回写
-                if updated:
-                    with open(vp_path, "w", encoding="utf-8") as f:
-                        json.dump(vp_data, f, ensure_ascii=False, indent=2)
+            total_dur = sum(
+                s.get("final_duration", 0) for s in segments)
+            ctx.log(f"    总时长: {total_dur}s")
 
-                total_dur = sum(
-                    s.get("final_duration", 0) for s in segments)
-                ctx.log(f"    总时长: {total_dur}s")
-
-        asyncio.run(_gen_all_tts())
         return StageResult(success=True)
 
     # ================================================================
@@ -1192,6 +1201,48 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
             ctx.log(f"\n  -- 单元 {un}: 字幕压制 --")
 
+            # 字幕参数：9:16 竖屏 720px 宽，fontsize=28，留边距 40px
+            # 每行最大字符数: (720 - 40*2) / 28 ≈ 22 个中文字
+            MAX_CHARS_PER_LINE = 20
+            FONT_SIZE = 28
+
+            def _wrap_and_split(text, duration):
+                """将文本折行，长文本按时长拆成多段。
+
+                Returns:
+                    list of (start_sec, end_sec, display_text)
+                """
+                # 按 MAX_CHARS_PER_LINE 折行
+                lines = []
+                while text:
+                    if len(text) <= MAX_CHARS_PER_LINE:
+                        lines.append(text)
+                        break
+                    # 找标点断句
+                    cut = MAX_CHARS_PER_LINE
+                    for punct in "，。！？；、":
+                        idx = text[:MAX_CHARS_PER_LINE].rfind(punct)
+                        if idx > MAX_CHARS_PER_LINE // 2:
+                            cut = idx + 1
+                            break
+                    lines.append(text[:cut])
+                    text = text[cut:]
+
+                # 如果总共 ≤ 2 行，一次性显示
+                if len(lines) <= 2:
+                    display = "\n".join(lines)
+                    return [(0, duration, display)]
+
+                # 超过 2 行：拆成 2 段，各显示一半时长
+                mid = len(lines) // 2
+                part1 = "\n".join(lines[:mid])
+                part2 = "\n".join(lines[mid:])
+                half = duration / 2
+                return [
+                    (0, half, part1),
+                    (half, duration, part2),
+                ]
+
             for seg in segments:
                 sn = seg["segment_number"]
                 narration = seg.get("narration_text", "")
@@ -1213,16 +1264,24 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 if not os.path.exists(video_in):
                     continue
 
-                # 旁白字幕 — 仅文字，无角色名
-                safe_text = _ffmpeg_safe_text(narration)
+                duration = seg.get("final_duration", 5)
+                parts = _wrap_and_split(narration, duration)
 
-                filter_str = (
-                    f"drawtext=fontfile='{font_path}':"
-                    f"fontsize=28:fontcolor=white:"
-                    f"borderw=2:bordercolor=black:"
-                    f"x=(w-text_w)/2:y=h-th-60:"
-                    f"text='{safe_text}'"
-                )
+                # 构建 drawtext filter（支持多段分时显示）
+                filters = []
+                for start, end, text in parts:
+                    safe = _ffmpeg_safe_text(text)
+                    f = (
+                        f"drawtext=fontfile='{font_path}':"
+                        f"fontsize={FONT_SIZE}:fontcolor=white:"
+                        f"borderw=2:bordercolor=black:"
+                        f"x=(w-text_w)/2:y=h-th-60:"
+                        f"text='{safe}':"
+                        f"enable='between(t,{start:.1f},{end:.1f})'"
+                    )
+                    filters.append(f)
+
+                filter_str = ",".join(filters)
 
                 cmd = [
                     "ffmpeg", "-y", "-i", video_in,
@@ -1234,7 +1293,8 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 result = subprocess.run(
                     cmd, capture_output=True, timeout=30)
                 if result.returncode == 0:
-                    ctx.log(f"    段{sn}: ✓ 旁白字幕")
+                    line_info = f"{len(parts)}段" if len(parts) > 1 else "1段"
+                    ctx.log(f"    段{sn}: ✓ 旁白字幕 ({line_info})")
                 else:
                     ctx.log(f"    段{sn}: ✗ 字幕压制失败")
 
@@ -1414,10 +1474,19 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 except Exception as e:
                     ctx.log(f"    BGM: ✗ {e}")
 
+            # -- Step E2: BGM 预处理（VAD 裁剪首尾静音 + 循环填充）--
+            bgm_processed_path = os.path.join(
+                ctx.output_dir, "audio", f"u{un}_bgm_processed.mp3")
+            if os.path.exists(bgm_path) and os.path.getsize(bgm_path) > 100:
+                result = _preprocess_bgm(
+                    bgm_path, video_dur, bgm_processed_path)
+                if result:
+                    bgm_path = bgm_processed_path
+
             # -- Step F: 三层音频混合 --
             # Layer 1: Video original audio (sound=on) → -35dB
             # Layer 2: Narration TTS → mean=-15dB
-            # Layer 3: BGM (instrumental) → mean=-23dB
+            # Layer 3: BGM (instrumental) → mean=-28dB
             has_narration = (os.path.exists(narration_track)
                             and os.path.getsize(narration_track) > 100)
             has_bgm = (os.path.exists(bgm_path)
@@ -1445,7 +1514,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 if has_bgm:
                     bgm_mean, bgm_max = _measure_mean_volume(
                         bgm_path, duration=video_dur)
-                    bgm_target_db = -23
+                    bgm_target_db = -28
                     bgm_adjust_db = bgm_target_db - bgm_mean
                     if bgm_adjust_db > 0:
                         max_after = bgm_max + bgm_adjust_db
@@ -1455,7 +1524,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     ctx.log(f"    BGM: mean={bgm_mean:.1f}dB → "
                             f"adjust={bgm_adjust_db:.1f}dB")
 
-                fade_out_start = max(0, video_dur - 2)
+                fade_out_start = max(0, video_dur - 1)
 
                 # 构建 filter_complex
                 inputs = ["-i", concat_out]
@@ -1481,8 +1550,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     filter_parts.append(
                         f"[{input_idx}:a]"
                         f"volume={bgm_adjust_db:.1f}dB,"
-                        f"afade=t=in:d=2,"
-                        f"afade=t=out:st={fade_out_start:.0f}:d=2"
+                        f"afade=t=out:st={fade_out_start:.0f}:d=1"
                         f"[bgm_adj]")
                     mix_labels.append("[bgm_adj]")
                     input_idx += 1

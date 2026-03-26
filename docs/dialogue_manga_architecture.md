@@ -4,7 +4,7 @@
 
 ## 1. 定位与区别
 
-| 维度 | 旁白漫剧 (`narration_manga`) | 对话漫剧 (`dialogue_manga`) |
+| 维度 | 旁白漫剧 V2 (`narration_manga_v2`) | 对话漫剧 (`dialogue_manga`) |
 |------|----------------------------|---------------------------|
 | 叙事方式 | 单一旁白配音 | 多角色对话 + 动作描写 |
 | 音频 | 全局 TTS → 按段切分 | 按段独立 TTS，角色音色各异 |
@@ -21,7 +21,7 @@
 LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 图像生成:    Jimeng T2I (角色三视图) + Gemini 3.1 Flash (场景/宫格)
 视频生成:    Kling V3 image2video + lip-sync
-语音合成:    MiniMax TTS (21 中文音色 + 情绪控制)
+语音合成:    Qwen3-TTS-Instruct-Flash (50+ 中文音色 + 自然语言 instruct)
 音乐生成:    ElevenLabs Music API
 后处理:      FFmpeg (字幕/混音/帧率统一/拼接) + PIL (宫格裁切)
 ```
@@ -40,8 +40,9 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 │   输出: characters/charref_{cid}_v{n}.png           │
 ├─────────────────────────────────────────────────────┤
 │ Stage 3: char_voices                                │
-│   LLM 匹配 voice_trait → MiniMax voice_id           │
-│   MiniMax TTS → 主音色样本                            │
+│   LLM 匹配 voice_trait → Qwen voice_id              │
+│   LLM 生成 per-character tts_instructions            │
+│   Qwen TTS → 主音色样本 (同步调用)                     │
 │   FFmpeg aecho → 回忆混响版                           │
 │   输出: voice_map.json + voice_library.json          │
 ├─────────────────────────────────────────────────────┤
@@ -61,10 +62,10 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 │         grids/video_segments_u{n}.json              │
 ├─────────────────────────────────────────────────────┤
 │ Stage 7: dialogue_tts                               │
-│   MiniMax TTS → 对话语音                             │
+│   Qwen TTS (同步) → 对话语音                          │
 │   时长校准: final_dur = max(estimated, ceil(tts), 3) │
 │   回忆场景: FFmpeg aecho 加混响                       │
-│   输出: audio/u{n}_seg{nn}_dialogue.mp3             │
+│   输出: audio/u{n}_seg{nn}_dialogue.wav             │
 ├─────────────────────────────────────────────────────┤
 │ Stage 8: video_gen                                  │
 │   Kling V3 image2video (首帧 only, Plan C)          │
@@ -75,12 +76,16 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 ├─────────────────────────────────────────────────────┤
 │ Stage 9: subtitle_burn                              │
 │   FFmpeg drawtext: 角色名(#FFD700) + 台词(white)     │
+│   自动折行: 每行30字, 标点优先断行                      │
+│   角色名动态上移避免多行台词重叠 (LINE_HEIGHT=36)       │
 │   字体: PingFang SC                                 │
 │   输出: videos/u{n}_seg{nn}_subtitled.mp4           │
 ├─────────────────────────────────────────────────────┤
 │ Stage 10: assembly                                  │
 │   统一 1280×720 @30fps                              │
-│   FFmpeg concat → ElevenLabs BGM (volume 0.15)      │
+│   ElevenLabs BGM (instrumental only, -28dB)         │
+│   BGM 预处理: compand + dynaudnorm (3s, 25dB)       │
+│   无淡入 + 淡出1s · dB精确对标 · 防 clipping          │
 │   输出: videos/u{n}_output.mp4                      │
 └─────────────────────────────────────────────────────┘
 ```
@@ -138,7 +143,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
       },
       "estimated_duration": 5,
       "final_duration": 5,
-      "tts_path": "/abs/path/to/audio.mp3",
+      "tts_path": "/abs/path/to/audio.wav",
       "tts_duration": 4.2,
       "video_prompt": "视频生成提示词"
     }
@@ -155,8 +160,8 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 ├── candidates.json              # CandidateManager 持久化
 ├── characters/
 │   ├── charref_char_001_v1.png  # 三视图
-│   ├── voice_char_001_v1.mp3    # 主音色样本
-│   ├── voice_char_001_memory_v1.mp3  # 回忆混响版
+│   ├── voice_char_001_v1.wav    # 主音色样本
+│   ├── voice_char_001_memory_v1.wav  # 回忆混响版
 │   └── voice_library.json       # 音色元数据
 ├── scenes/
 │   └── scene_u1_s1_v1.png       # 场景参考图
@@ -169,7 +174,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 │       ├── frame_01.png         # 切出的 16 帧
 │       └── ...
 ├── audio/
-│   ├── u1_seg01_dialogue.mp3    # 对话 TTS
+│   ├── u1_seg01_dialogue.wav    # 对话 TTS
 │   └── u1_bgm.mp3              # BGM
 └── videos/
     ├── u1_seg01_final.mp4       # 原始视频
@@ -184,7 +189,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 |---------|------|------|
 | 宫格帧 | `op_reroll_frame` | FIFO 切换备选 → 超限则重生成整张宫格 → 切 16 帧 (max 3 版) |
 | 视频段 | `op_reroll_video_segment` | 重新 Kling V3 + lip-sync |
-| 对话 TTS | `op_reroll_dialogue_tts` | 重新 MiniMax TTS，支持 voice_id 覆写 |
+| 对话 TTS | `op_reroll_dialogue_tts` | 重新 Qwen TTS，支持 voice_id 覆写 |
 | 角色参考图 | `op_reroll_char_ref` (继承 mixin) | Jimeng T2I 重新生成 |
 | 场景背景 | `op_reroll_scene_bg` (继承 mixin) | Gemini 重新生成 |
 

@@ -231,7 +231,7 @@
     <span class="agent-chip img">Gemini 3.1 Flash — 场景/宫格</span>
     <span class="agent-chip vid">Kling V3 — 视频生成</span>
     <span class="agent-chip vid">Kling V3 — Lip-sync</span>
-    <span class="agent-chip aud">MiniMax — TTS</span>
+    <span class="agent-chip aud">Qwen3-TTS — 语音合成</span>
     <span class="agent-chip aud">ElevenLabs — BGM</span>
     <span class="agent-chip tool">FFmpeg + PIL — 后处理</span>
   </div>
@@ -305,7 +305,7 @@
   <div class="stage-header">
     <div class="stage-num">3</div>
     <div>
-      <div class="stage-title">角色音色库 <span class="badge badge-llm">LLM</span> <span class="badge badge-audio">MiniMax</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
+      <div class="stage-title">角色音色库 <span class="badge badge-llm">LLM</span> <span class="badge badge-audio">Qwen TTS</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
       <div class="stage-name">stage_char_voices</div>
     </div>
   </div>
@@ -313,17 +313,17 @@
     <div class="detail-box">
       <strong>Step 1: LLM 音色匹配</strong>
       <ul>
-        <li>输入：角色 voice_trait + 21 种 MiniMax 音色描述</li>
-        <li>输出：voice_id / emotion / intro_text</li>
+        <li>输入：角色 voice_trait + 50+ 种 Qwen 音色描述</li>
+        <li>输出：voice_id / tts_instructions (30-60字中文风格指令) / intro_text</li>
         <li>保存至 <code>voice_map.json</code></li>
       </ul>
     </div>
     <div class="detail-box">
-      <strong>Step 2: TTS 生成</strong>
+      <strong>Step 2: TTS 生成 (同步)</strong>
       <ul>
-        <li>MiniMax TTS 生成自我介绍台词 (speed=0.9)</li>
-        <li>主音色：<code>voice_{cid}_v{n}.mp3</code></li>
-        <li>回忆版：FFmpeg aecho 混响 → <code>voice_{cid}_memory_v{n}.mp3</code></li>
+        <li>Qwen TTS 同步调用 (<code>qwen_tts()</code>) 生成自我介绍台词</li>
+        <li>主音色：<code>voice_{cid}_v{n}.wav</code></li>
+        <li>回忆版：FFmpeg aecho 混响 → <code>voice_{cid}_memory_v{n}.wav</code></li>
       </ul>
     </div>
     <div class="detail-box full">
@@ -434,7 +434,7 @@
   <div class="stage-header">
     <div class="stage-num">7</div>
     <div>
-      <div class="stage-title">对话 TTS + 时长校准 <span class="badge badge-audio">MiniMax</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
+      <div class="stage-title">对话 TTS + 时长校准 <span class="badge badge-audio">Qwen TTS</span> <span class="badge badge-ffmpeg">FFmpeg</span></div>
       <div class="stage-name">stage_dialogue_tts</div>
     </div>
   </div>
@@ -443,8 +443,8 @@
       <strong>处理流程</strong>
       <ul>
         <li>仅处理 <code>is_dialogue=true</code> 的段</li>
-        <li>按 char_id 查询 voice_map 获取 voice_id + emotion</li>
-        <li>去除括号注释后调用 MiniMax TTS</li>
+        <li>按 char_id 查询 voice_map 获取 voice_id + tts_instructions</li>
+        <li>去除括号注释后同步调用 Qwen TTS (<code>qwen_tts()</code>)</li>
         <li>回忆场景: 额外 FFmpeg aecho 加混响</li>
       </ul>
     </div>
@@ -523,7 +523,8 @@
       <ul>
         <li>角色名: <span style="color:#FFD700;">■</span> #FFD700 金色, 22px, 黑色描边 1.5px</li>
         <li>台词: <span style="color:#fff;">■</span> 白色, 28px, 黑色描边 2px</li>
-        <li>位置: 底部居中 (y=h-th-60 / y=h-th-95)</li>
+        <li>自动折行: 每行 30 字，标点优先断行</li>
+        <li>角色名自动上移避免与多行台词重叠 (LINE_HEIGHT=36, 动态计算 y 偏移)</li>
         <li>字体: PingFang SC (macOS 内置)</li>
       </ul>
     </div>
@@ -571,9 +572,10 @@
     <div class="detail-box">
       <strong>Step C: BGM</strong>
       <ul>
-        <li>LLM 生成音乐 prompt (50-80 词英文)</li>
+        <li>LLM 生成纯器乐 prompt (instrumental only, 50-80 词英文)</li>
         <li>ElevenLabs Music API 生成 BGM</li>
-        <li>BGM volume=0.15, 淡入 2s, 淡出 2s</li>
+        <li>BGM 预处理: compand + dynaudnorm (3s窗口, maxgain=25dB) 拉平首尾弱音量</li>
+        <li>目标音量 -28dB · 无淡入 + 淡出 1s · dB 精确对标 · 防 clipping</li>
         <li>amix 混合：原始音频 + BGM</li>
       </ul>
     </div>
@@ -618,7 +620,7 @@
       <tr>
         <td>对话 TTS</td>
         <td><code>op_reroll_dialogue_tts</code></td>
-        <td>重新 MiniMax TTS，支持 voice_id 覆写，回忆场景自动加混响</td>
+        <td>重新 Qwen TTS，支持 voice_id 覆写，回忆场景自动加混响</td>
         <td>无限制</td>
       </tr>
       <tr>
@@ -655,7 +657,7 @@
     <tbody>
       <tr><td><code>review storyboard</code></td><td>所有 units 摘要 (title/conflict/emotion/characters/dialogue_count) + character_profiles</td></tr>
       <tr><td><code>review status</code></td><td>10 个 stage 完成状态 + 各类资产数量统计</td></tr>
-      <tr><td><code>review characters</code></td><td>角色三视图路径 + 音色信息 (voice_id/emotion/samples)</td></tr>
+      <tr><td><code>review characters</code></td><td>角色三视图路径 + 音色信息 (voice_id/tts_instructions/samples)</td></tr>
       <tr><td><code>review unit {n}</code></td><td>指定 unit 的 15 段分镜详情 (帧路径/视频路径/TTS路径/时长)</td></tr>
       <tr><td><code>review assets {type}</code></td><td>指定类型的全部资产列表 (scene_refs/grids/frames/videos)</td></tr>
     </tbody>

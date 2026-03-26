@@ -27,6 +27,7 @@ from app.workflows.interactive import InteractiveOpsMixin
 from vendor.qwen.client import chat_json
 from vendor.jimeng.t2i import generate_image
 from vendor.gemini.client import generate_image_with_refs
+from app.workflows.templates._shared import _preprocess_bgm
 
 # ── 常量 ─────────────────────────────────────────────────────────
 
@@ -182,36 +183,22 @@ def _validated_chat_json(system_prompt, user_prompt, required_keys,
     raise RuntimeError(f"LLM 调用 {LLM_MAX_RETRIES} 次均失败")
 
 # MiniMax 可用中文音色
-MINIMAX_VOICES = {
-    # 男声
-    "male-qn-qingse": "青涩青年，年轻清爽的男声",
-    "male-qn-jingying": "精英青年，沉稳干练的男声",
-    "male-qn-badao": "霸道青年，低沉有力的男声",
-    "male-qn-daxuesheng": "大学生，阳光活泼的男声",
-    "presenter_male": "男性主持人，标准浑厚",
-    "audiobook_male_1": "男性有声书1，温和叙述",
-    "audiobook_male_2": "男性有声书2，沉稳讲述",
-    "Deep_Voice_Man": "低沉男声，深邃有磁性",
-    "Young_Knight": "年轻骑士，英气少年",
-    "Determined_Man": "坚定男声，刚毅果断",
-    "Imposing_Manner": "威严男声，气场强大",
-    "cute_boy": "可爱男孩，稚嫩童声",
-    # 女声
-    "female-shaonv": "少女音，清亮活泼的年轻女声",
-    "female-yujie": "御姐音，成熟知性的女声",
-    "female-chengshu": "成熟女性，温柔沉稳",
-    "female-tianmei": "甜美女性，柔软甜蜜",
-    "presenter_female": "女性主持人，端庄大方",
-    "audiobook_female_1": "女性有声书1，温柔叙述",
-    "audiobook_female_2": "女性有声书2，知性讲述",
-    "Wise_Woman": "智慧女性，从容淡定",
-    "Calm_Woman": "沉静女性，安宁平和",
-}
+# 使用 Qwen TTS 音色
+from vendor.qwen.tts import QWEN_VOICES
 
-# LLM 音色匹配 Prompt
-VOICE_MATCH_SYSTEM_PROMPT = """你是一个语音导演。根据角色的声音特征描述，从可用音色列表中选择最匹配的音色ID。
-同时为每个角色生成一句符合其性格的自我介绍台词（20-40字，第一人称）。
-同时根据角色性格选择最合适的情感：happy/sad/angry/fearful/disgusted/surprised/calm
+# LLM 音色匹配 Prompt (Qwen TTS 版)
+VOICE_MATCH_SYSTEM_PROMPT = """你是一个顶级配音导演。根据每个角色的声音特征和性格描述，从可用音色列表中选择最匹配的音色ID。
+
+对每个角色，你需要：
+1. 选择最匹配的音色 ID
+2. 生成一句符合其性格的自我介绍台词（20-40字，第一人称）
+3. 编写该角色的 TTS 风格指令（instruct），描述其说话的声音质感、语速、情感特点（30-60字中文）
+
+【TTS 风格指令要求】
+- 描述具体的声音质感（如：低沉沙哑/清亮甜美/沧桑苍老）
+- 描述说话节奏（如：语速沉稳/说话急促/抑扬顿挫）
+- 描述情感基调（如：冷漠疏离/温柔坚定/暴躁易怒）
+- 要结合角色性格，不要泛泛而谈
 
 严格输出JSON格式：
 {{
@@ -221,7 +208,7 @@ VOICE_MATCH_SYSTEM_PROMPT = """你是一个语音导演。根据角色的声音�
       "voice_id": "选中的音色ID",
       "reason": "选择理由（一句话）",
       "intro_text": "角色自我介绍台词",
-      "emotion": "情感"
+      "tts_instructions": "TTS风格指令（30-60字中文）"
     }}
   ]
 }}"""
@@ -232,7 +219,7 @@ VOICE_MATCH_USER_PROMPT = """【角色列表】：
 【可用音色】：
 {voices_json}
 
-请为每个角色选择最匹配的音色，并生成自我介绍台词。"""
+请为每个角色选择最匹配的音色，并生成自我介绍台词和 TTS 风格指令。"""
 
 
 # ── Storyboard Prompt ────────────────────────────────────────────
@@ -627,12 +614,12 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 for c in ctx.characters
             ]
 
-            ctx.log(f"  LLM 匹配音色: {len(chars_for_llm)} 个角色")
+            ctx.log(f"  LLM 匹配音色 (Qwen TTS): {len(chars_for_llm)} 个角色")
             result = _validated_chat_json(
                 system_prompt=VOICE_MATCH_SYSTEM_PROMPT,
                 user_prompt=VOICE_MATCH_USER_PROMPT.format(
                     characters_json=json.dumps(chars_for_llm, ensure_ascii=False, indent=2),
-                    voices_json=json.dumps(MINIMAX_VOICES, ensure_ascii=False, indent=2),
+                    voices_json=json.dumps(QWEN_VOICES, ensure_ascii=False, indent=2),
                 ),
                 required_keys=["matches"],
                 list_key="matches",
@@ -640,13 +627,13 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 max_tokens=2048,
             )
 
-            # 构建 voice_map: char_id → {voice_id, intro_text, emotion, reason}
+            # 构建 voice_map: char_id → {voice_id, intro_text, tts_instructions, reason}
             voice_map = {}
             for m in result.get("matches", []):
                 voice_map[m["char_id"]] = {
                     "voice_id": m["voice_id"],
                     "intro_text": m["intro_text"],
-                    "emotion": m.get("emotion", "calm"),
+                    "tts_instructions": m.get("tts_instructions", ""),
                     "reason": m.get("reason", ""),
                 }
 
@@ -657,90 +644,80 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         for c in ctx.characters:
             cid = c["char_id"]
             vm = voice_map.get(cid, {})
-            ctx.log(f"  {c['name']}: voice_id={vm.get('voice_id','?')} "
-                    f"emotion={vm.get('emotion','?')} | {vm.get('reason','')}")
+            ctx.log(f"  {c['name']}: voice={vm.get('voice_id','?')} | {vm.get('reason','')}")
+            ctx.log(f"    instruct: {vm.get('tts_instructions', '')}")
             ctx.log(f"    台词: \"{vm.get('intro_text', '')}\"")
 
-        # ── Step 2: MiniMax TTS 生成语音样本 ──
-        async def _gen_voices():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
+        # ── Step 2: Qwen TTS 生成语音样本 ──
+        from vendor.qwen.tts import qwen_tts
 
-            for c in ctx.characters:
-                cid = c["char_id"]
-                name = c["name"]
-                vm = voice_map.get(cid, {})
-                voice_id = vm.get("voice_id", "male-qn-qingse")
-                intro_text = vm.get("intro_text", f"我是{name}。")
-                emotion = vm.get("emotion", "calm")
+        for c in ctx.characters:
+            cid = c["char_id"]
+            name = c["name"]
+            vm = voice_map.get(cid, {})
+            voice_id = vm.get("voice_id", "Serena")
+            intro_text = vm.get("intro_text", f"我是{name}。")
+            instructions = vm.get("tts_instructions", "")
 
-                # ── 主音色样本 ──
-                asset_key = f"char_voice:{cid}"
-                if not ctx.candidates.is_invalidated(asset_key):
-                    sel = ctx.candidates.get_selected_path(asset_key)
-                    if sel and os.path.exists(sel) and os.path.getsize(sel) > 100:
-                        ctx.log(f"  {name} ({cid}) 主音色: ★ 已存在")
-                        # 继续检查回忆版
-                    else:
-                        sel = None
+            # ── 主音色样本 ──
+            asset_key = f"char_voice:{cid}"
+            if not ctx.candidates.is_invalidated(asset_key):
+                sel = ctx.candidates.get_selected_path(asset_key)
+                if sel and os.path.exists(sel) and os.path.getsize(sel) > 100:
+                    ctx.log(f"  {name} ({cid}) 主音色: ★ 已存在")
                 else:
-                    ctx.candidates.clear_invalidation(asset_key)
                     sel = None
+            else:
+                ctx.candidates.clear_invalidation(asset_key)
+                sel = None
 
-                if not sel:
-                    job_id = await provider.submit_job({
-                        "text": intro_text,
-                        "voice_id": voice_id,
-                        "speed": 0.9,
-                        "emotion": emotion,
-                    })
-                    status = await provider.poll_job(job_id)
-                    if status.result_data:
-                        ver = ctx.candidates.next_version(asset_key)
-                        path = f"{ctx.output_dir}/characters/voice_{cid}_v{ver}.mp3"
-                        with open(path, "wb") as f:
-                            f.write(status.result_data)
-                        rel = os.path.relpath(path, ctx.output_dir)
-                        ctx.candidates.register(asset_key, rel)
-                        ctx.log(f"  {name} ({cid}) 主音色: ✓ voice={voice_id} (v{ver})")
-                    else:
-                        ctx.log(f"  {name} ({cid}) 主音色: ✗ {status.error}")
-                    await asyncio.sleep(1)
-
-                # ── 回忆版（加混响） ──
-                asset_key_mem = f"char_voice_memory:{cid}"
-                if not ctx.candidates.is_invalidated(asset_key_mem):
-                    sel_mem = ctx.candidates.get_selected_path(asset_key_mem)
-                    if sel_mem and os.path.exists(sel_mem) and os.path.getsize(sel_mem) > 100:
-                        ctx.log(f"  {name} ({cid}) 回忆版: ★ 已存在")
-                        continue
+            if not sel:
+                audio_data = qwen_tts(
+                    text=intro_text, voice=voice_id,
+                    instructions=instructions,
+                )
+                if audio_data:
+                    ver = ctx.candidates.next_version(asset_key)
+                    path = f"{ctx.output_dir}/characters/voice_{cid}_v{ver}.wav"
+                    with open(path, "wb") as f:
+                        f.write(audio_data)
+                    rel = os.path.relpath(path, ctx.output_dir)
+                    ctx.candidates.register(asset_key, rel)
+                    ctx.log(f"  {name} ({cid}) 主音色: ✓ voice={voice_id} (v{ver})")
                 else:
-                    ctx.candidates.clear_invalidation(asset_key_mem)
+                    ctx.log(f"  {name} ({cid}) 主音色: ✗ Qwen TTS 失败")
+                time.sleep(0.3)
 
-                # 找到主音色文件
-                main_sel = ctx.candidates.get_selected_path(f"char_voice:{cid}")
-                if not main_sel or not os.path.exists(main_sel):
-                    ctx.log(f"  {name} ({cid}) 回忆版: ✗ 主音色不存在，跳过")
+            # ── 回忆版（加混响） ──
+            asset_key_mem = f"char_voice_memory:{cid}"
+            if not ctx.candidates.is_invalidated(asset_key_mem):
+                sel_mem = ctx.candidates.get_selected_path(asset_key_mem)
+                if sel_mem and os.path.exists(sel_mem) and os.path.getsize(sel_mem) > 100:
+                    ctx.log(f"  {name} ({cid}) 回忆版: ★ 已存在")
                     continue
+            else:
+                ctx.candidates.clear_invalidation(asset_key_mem)
 
-                ver_mem = ctx.candidates.next_version(asset_key_mem)
-                mem_path = f"{ctx.output_dir}/characters/voice_{cid}_memory_v{ver_mem}.mp3"
+            main_sel = ctx.candidates.get_selected_path(f"char_voice:{cid}")
+            if not main_sel or not os.path.exists(main_sel):
+                ctx.log(f"  {name} ({cid}) 回忆版: ✗ 主音色不存在，跳过")
+                continue
 
-                # FFmpeg 加混响：aecho 滤镜模拟回忆感
-                cmd = [
-                    "ffmpeg", "-y", "-i", main_sel,
-                    "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
-                    mem_path,
-                ]
-                result = subprocess.run(cmd, capture_output=True, timeout=15)
-                if result.returncode == 0 and os.path.exists(mem_path):
-                    rel_mem = os.path.relpath(mem_path, ctx.output_dir)
-                    ctx.candidates.register(asset_key_mem, rel_mem)
-                    ctx.log(f"  {name} ({cid}) 回忆版: ✓ +混响 (v{ver_mem})")
-                else:
-                    ctx.log(f"  {name} ({cid}) 回忆版: ✗ FFmpeg 失败")
+            ver_mem = ctx.candidates.next_version(asset_key_mem)
+            mem_path = f"{ctx.output_dir}/characters/voice_{cid}_memory_v{ver_mem}.wav"
 
-        asyncio.run(_gen_voices())
+            cmd = [
+                "ffmpeg", "-y", "-i", main_sel,
+                "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
+                mem_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=15)
+            if result.returncode == 0 and os.path.exists(mem_path):
+                rel_mem = os.path.relpath(mem_path, ctx.output_dir)
+                ctx.candidates.register(asset_key_mem, rel_mem)
+                ctx.log(f"  {name} ({cid}) 回忆版: ✓ +混响 (v{ver_mem})")
+            else:
+                ctx.log(f"  {name} ({cid}) 回忆版: ✗ FFmpeg 失败")
 
         # ── 保存元数据 ──
         meta_path = f"{ctx.output_dir}/characters/voice_library.json"
@@ -751,7 +728,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
             library[cid] = {
                 "name": c["name"],
                 "voice_id": vm.get("voice_id", ""),
-                "emotion": vm.get("emotion", "calm"),
+                "tts_instructions": vm.get("tts_instructions", ""),
                 "intro_text": vm.get("intro_text", ""),
                 "main_audio": ctx.candidates.get_selected_path(f"char_voice:{cid}") or "",
                 "memory_audio": ctx.candidates.get_selected_path(f"char_voice_memory:{cid}") or "",
@@ -1111,6 +1088,10 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         import math
         from app.services.ffmpeg_utils import get_media_duration
 
+        import math
+        from app.services.ffmpeg_utils import get_media_duration
+        from vendor.qwen.tts import qwen_tts
+
         os.makedirs(f"{ctx.output_dir}/audio", exist_ok=True)
 
         # 加载音色映射
@@ -1118,111 +1099,104 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         with open(voice_map_path) as f:
             voice_map = json.load(f)
 
-        async def _gen_all_tts():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
+        for ui, unit in enumerate(ctx.segments):
+            un = unit.get("unit_number", ui + 1)
+            vp_path = f"{ctx.output_dir}/grids/video_segments_u{un}.json"
+            if not os.path.exists(vp_path):
+                continue
 
-            for ui, unit in enumerate(ctx.segments):
-                un = unit.get("unit_number", ui + 1)
-                vp_path = f"{ctx.output_dir}/grids/video_segments_u{un}.json"
-                if not os.path.exists(vp_path):
+            with open(vp_path) as f:
+                vp_data = json.load(f)
+            segments = vp_data.get("video_segments", [])
+
+            ctx.log(f"\n  ── 单元 {un}: TTS (Qwen) ──")
+            updated = False
+
+            for seg in segments:
+                sn = seg["segment_number"]
+
+                if not seg.get("is_dialogue"):
+                    seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
                     continue
 
-                with open(vp_path) as f:
-                    vp_data = json.load(f)
-                segments = vp_data.get("video_segments", [])
-
-                ctx.log(f"\n  ── 单元 {un}: TTS ──")
-                updated = False
-
-                for seg in segments:
-                    sn = seg["segment_number"]
-
-                    # 非台词段：只确保 final_duration >= 3
-                    if not seg.get("is_dialogue"):
-                        seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
+                if seg.get("tts_path") and seg.get("final_duration"):
+                    tts_p = seg["tts_path"]
+                    if os.path.exists(tts_p) and os.path.getsize(tts_p) > 100:
+                        ctx.log(f"    段{sn}: ★ 已存在")
                         continue
 
-                    # 已有 TTS 且有 final_duration → 跳过
-                    if seg.get("tts_path") and seg.get("final_duration"):
-                        tts_p = seg["tts_path"]
-                        if os.path.exists(tts_p) and os.path.getsize(tts_p) > 100:
-                            ctx.log(f"    段{sn}: ★ 已存在")
-                            continue
+                d = seg["dialogue"]
+                char_id = d.get("char_id", "")
+                content = d.get("content", "")
+                is_memory = seg.get("is_memory", False)
 
-                    d = seg["dialogue"]
-                    char_id = d.get("char_id", "")
-                    content = d.get("content", "")
-                    is_memory = seg.get("is_memory", False)
+                clean_text = re.sub(r'（[^）]*）', '', content)
+                clean_text = re.sub(r'\([^)]*\)', '', clean_text).strip()
+                if not clean_text:
+                    seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
+                    continue
 
-                    # 去括号注释
-                    clean_text = re.sub(r'（[^）]*）', '', content)
-                    clean_text = re.sub(r'\([^)]*\)', '', clean_text).strip()
-                    if not clean_text:
-                        seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
-                        continue
+                # 查角色音色 + instruct
+                vm = voice_map.get(char_id, {})
+                voice_id = vm.get("voice_id", "Serena")
+                base_instructions = vm.get("tts_instructions", "")
 
-                    # 选择音色：回忆场景用回忆版的音色参数（实际音频后处理加混响）
-                    vm = voice_map.get(char_id, {})
-                    voice_id = vm.get("voice_id", "male-qn-qingse")
-                    emotion = vm.get("emotion", "calm")
+                # 根据段落情感微调 instructions
+                seg_emotion = seg.get("emotion", "")
+                if seg_emotion:
+                    instructions = f"{base_instructions}，当前情感：{seg_emotion}"
+                else:
+                    instructions = base_instructions
 
-                    # 生成 TTS
-                    job_id = await provider.submit_job({
-                        "text": clean_text,
-                        "voice_id": voice_id,
-                        "speed": 0.9,
-                        "emotion": emotion,
-                    })
-                    status = await provider.poll_job(job_id)
+                audio_data = qwen_tts(
+                    text=clean_text, voice=voice_id,
+                    instructions=instructions,
+                )
 
-                    if status.result_data:
-                        audio_path = f"{ctx.output_dir}/audio/u{un}_seg{sn:02d}_dialogue.mp3"
-                        with open(audio_path, "wb") as f:
-                            f.write(status.result_data)
+                if audio_data:
+                    audio_path = f"{ctx.output_dir}/audio/u{un}_seg{sn:02d}_dialogue.wav"
+                    with open(audio_path, "wb") as f:
+                        f.write(audio_data)
 
-                        # 回忆场景：加混响
-                        if is_memory:
-                            mem_path = f"{ctx.output_dir}/audio/u{un}_seg{sn:02d}_dialogue_memory.mp3"
-                            subprocess.run([
-                                "ffmpeg", "-y", "-i", audio_path,
-                                "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
-                                mem_path,
-                            ], capture_output=True, timeout=15)
-                            if os.path.exists(mem_path):
-                                audio_path = mem_path
+                    # 回忆场景：加混响
+                    if is_memory:
+                        mem_path = f"{ctx.output_dir}/audio/u{un}_seg{sn:02d}_dialogue_memory.wav"
+                        subprocess.run([
+                            "ffmpeg", "-y", "-i", audio_path,
+                            "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
+                            mem_path,
+                        ], capture_output=True, timeout=15)
+                        if os.path.exists(mem_path):
+                            audio_path = mem_path
 
-                        tts_dur = get_media_duration(audio_path)
-                        final_dur = max(seg.get("estimated_duration", 3), math.ceil(tts_dur), 3)
+                    tts_dur = get_media_duration(audio_path)
+                    final_dur = max(seg.get("estimated_duration", 3), math.ceil(tts_dur), 3)
 
-                        seg["tts_path"] = os.path.abspath(audio_path)
-                        seg["tts_duration"] = tts_dur
-                        seg["final_duration"] = final_dur
-                        updated = True
+                    seg["tts_path"] = os.path.abspath(audio_path)
+                    seg["tts_duration"] = tts_dur
+                    seg["final_duration"] = final_dur
+                    updated = True
 
-                        # 注册到 CandidateManager
-                        tts_asset_key = f"dialogue_tts:u{un}_seg{sn:02d}"
-                        rel = os.path.relpath(audio_path, ctx.output_dir)
-                        if not ctx.candidates.list_candidates(tts_asset_key):
-                            ctx.candidates.register(tts_asset_key, rel)
+                    tts_asset_key = f"dialogue_tts:u{un}_seg{sn:02d}"
+                    rel = os.path.relpath(audio_path, ctx.output_dir)
+                    if not ctx.candidates.list_candidates(tts_asset_key):
+                        ctx.candidates.register(tts_asset_key, rel)
 
-                        mem_tag = " [回忆版]" if is_memory else ""
-                        ctx.log(f"    段{sn}: ✓ {d['character']} TTS={tts_dur:.1f}s → final={final_dur}s{mem_tag}")
-                    else:
-                        seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
-                        ctx.log(f"    段{sn}: ✗ TTS 失败")
+                    mem_tag = " [回忆版]" if is_memory else ""
+                    ctx.log(f"    段{sn}: ✓ {d['character']} TTS={tts_dur:.1f}s → final={final_dur}s{mem_tag}")
+                else:
+                    seg["final_duration"] = max(seg.get("estimated_duration", 3), 3)
+                    ctx.log(f"    段{sn}: ✗ TTS 失败")
 
-                    await asyncio.sleep(0.5)
+                time.sleep(0.3)
 
-                # 回写
-                if updated:
-                    with open(vp_path, "w", encoding="utf-8") as f:
-                        json.dump(vp_data, f, ensure_ascii=False, indent=2)
+            if updated:
+                with open(vp_path, "w", encoding="utf-8") as f:
+                    json.dump(vp_data, f, ensure_ascii=False, indent=2)
 
-                total_dur = sum(s.get("final_duration", 0) for s in segments)
-                ctx.log(f"    总时长: {total_dur}s")
+            total_dur = sum(s.get("final_duration", 0) for s in segments)
+            ctx.log(f"    总时长: {total_dur}s")
 
-        asyncio.run(_gen_all_tts())
         return StageResult(success=True)
 
     # ================================================================
@@ -1469,26 +1443,67 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 clean = re.sub(r'（[^）]*）', '', content)
                 clean = re.sub(r'\([^)]*\)', '', clean).strip()
 
-                safe_text = _ffmpeg_safe_text(clean)
-                safe_name = _ffmpeg_safe_text(char_name)
+                # 横屏 16:9 (1280px), fontsize=28, 留边距 → 每行约 30 字
+                MAX_CHARS = 30
+                # 折行：按标点优先断行
+                def _wrap_line(text, max_chars=MAX_CHARS):
+                    lines = []
+                    while text:
+                        if len(text) <= max_chars:
+                            lines.append(text)
+                            break
+                        cut = max_chars
+                        for punct in "，。！？；、":
+                            idx = text[:max_chars].rfind(punct)
+                            if idx > max_chars // 2:
+                                cut = idx + 1
+                                break
+                        lines.append(text[:cut])
+                        text = text[cut:]
+                    return lines
 
-                filter_str = (
-                    f"drawtext=fontfile='{font_path}':fontsize=28:fontcolor=white:"
-                    f"borderw=2:bordercolor=black:"
-                    f"x=(w-text_w)/2:y=h-th-60:"
-                    f"text='{safe_text}',"
-                    f"drawtext=fontfile='{font_path}':fontsize=22:fontcolor=#FFD700:"
+                lines = _wrap_line(clean)
+                num_lines = len(lines)
+
+                # 角色名在最上方，台词在下方，避免重叠
+                # 布局：角色名 y=h-th-(60 + 行高*台词行数)
+                # 台词每行 y=h-th-(60 + 行高*(行数-1-i))
+                LINE_HEIGHT = 36  # fontsize 28 + 行距
+                NAME_FONT_SIZE = 22
+                TEXT_FONT_SIZE = 28
+
+                filters = []
+                # 台词行（从下往上排列）
+                for i, line in enumerate(reversed(lines)):
+                    safe_line = _ffmpeg_safe_text(line)
+                    y_offset = 60 + LINE_HEIGHT * i
+                    filters.append(
+                        f"drawtext=fontfile='{font_path}':"
+                        f"fontsize={TEXT_FONT_SIZE}:fontcolor=white:"
+                        f"borderw=2:bordercolor=black:"
+                        f"x=(w-text_w)/2:y=h-th-{y_offset}:"
+                        f"text='{safe_line}'"
+                    )
+                # 角色名（在最上面一行台词之上）
+                safe_name = _ffmpeg_safe_text(char_name)
+                name_y_offset = 60 + LINE_HEIGHT * num_lines + 5
+                filters.append(
+                    f"drawtext=fontfile='{font_path}':"
+                    f"fontsize={NAME_FONT_SIZE}:fontcolor=#FFD700:"
                     f"borderw=1.5:bordercolor=black:"
-                    f"x=(w-text_w)/2:y=h-th-95:"
+                    f"x=(w-text_w)/2:y=h-th-{name_y_offset}:"
                     f"text='{safe_name}'"
                 )
+
+                filter_str = ",".join(filters)
 
                 cmd = ["ffmpeg", "-y", "-i", video_in, "-vf", filter_str,
                        "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                        video_out]
                 result = subprocess.run(cmd, capture_output=True, timeout=30)
                 if result.returncode == 0:
-                    ctx.log(f"    段{sn}: ✓ {char_name}字幕")
+                    line_info = f" ({num_lines}行)" if num_lines > 1 else ""
+                    ctx.log(f"    段{sn}: ✓ {char_name}字幕{line_info}")
                 else:
                     ctx.log(f"    段{sn}: ✗ 字幕压制失败")
 
@@ -1619,8 +1634,16 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     ctx.log(f"    BGM: ✗ {e}")
 
             if os.path.exists(bgm_path) and os.path.getsize(bgm_path) > 100:
+                # BGM 预处理：VAD 裁剪首尾静音 + 循环填充
+                bgm_processed = f"{ctx.output_dir}/audio/u{un}_bgm_processed.mp3"
+                processed = _preprocess_bgm(
+                    bgm_path, video_dur, bgm_processed,
+                )
+                if processed:
+                    bgm_path = bgm_processed
+
                 # 测量 BGM 实际使用段的 mean/max volume，精确调整到目标 dB
-                bgm_target_db = -23
+                bgm_target_db = -28
                 probe_cmd = subprocess.run(
                     ["ffmpeg", "-i", bgm_path, "-t", str(video_dur),
                      "-af", "volumedetect", "-f", "null", "-"],
@@ -1650,12 +1673,12 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                         ctx.log(f"    BGM: 防 clipping, headroom={headroom:.1f}dB, 限制 adjust={adjust_db:.1f}dB")
                 ctx.log(f"    BGM: mean={bgm_mean_db:.1f}dB max={bgm_max_db:.1f}dB → adjust={adjust_db:.1f}dB → target≈{bgm_target_db}dB")
 
-                fade_out_start = max(0, video_dur - 2)
+                fade_out_start = max(0, video_dur - 1)
                 cmd = [
                     "ffmpeg", "-y",
                     "-i", concat_out, "-i", bgm_path,
                     "-filter_complex",
-                    f"[1:a]volume={adjust_db:.1f}dB,afade=t=in:d=2,afade=t=out:st={fade_out_start:.0f}:d=2[bgm];"
+                    f"[1:a]volume={adjust_db:.1f}dB,afade=t=out:st={fade_out_start:.0f}:d=1[bgm];"
                     f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                     "-map", "0:v", "-map", "[aout]",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
@@ -2507,26 +2530,15 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
             voice_map = {}
 
         vm = voice_map.get(char_id, {})
-        final_voice_id = voice_id or vm.get("voice_id", "male-qn-qingse")
-        emotion = vm.get("emotion", "calm")
+        final_voice_id = voice_id or vm.get("voice_id", "Serena")
+        instructions = vm.get("tts_instructions", "")
 
-        # 生成 TTS
-        async def _gen():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
-            job_id = await provider.submit_job({
-                "text": clean_text,
-                "voice_id": final_voice_id,
-                "speed": 0.9,
-                "emotion": emotion,
-            })
-            status = await provider.poll_job(job_id)
-            return status.result_data
-
-        try:
-            data = asyncio.run(_gen())
-        except Exception as e:
-            return {"success": False, "message": f"TTS 生成失败: {e}"}
+        # 生成 TTS (Qwen)
+        from vendor.qwen.tts import qwen_tts
+        data = qwen_tts(
+            text=clean_text, voice=final_voice_id,
+            instructions=instructions,
+        )
 
         if not data:
             return {"success": False, "message": "TTS 生成失败"}
@@ -2535,14 +2547,14 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         version = cm.next_version(tts_asset_key)
         os.makedirs(os.path.join(output_dir, "audio"), exist_ok=True)
         audio_path = os.path.join(output_dir, "audio",
-                                  f"u{unit_number}_seg{segment_number:02d}_dialogue_v{version}.mp3")
+                                  f"u{unit_number}_seg{segment_number:02d}_dialogue_v{version}.wav")
         with open(audio_path, "wb") as f:
             f.write(data)
 
         # 回忆场景：加混响
         is_memory = seg.get("is_memory", False)
         if is_memory:
-            mem_path = audio_path.replace(".mp3", "_memory.mp3")
+            mem_path = audio_path.replace(".wav", "_memory.wav")
             result = subprocess.run([
                 "ffmpeg", "-y", "-i", audio_path,
                 "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
