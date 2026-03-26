@@ -131,9 +131,9 @@ NARRATION_STORYBOARD_SYSTEM_PROMPT = """你是一个漫剧推广视频策划师�
       "core_conflict": "核心冲突一句话",
       "emotion_tone": "悬疑紧张",
       "key_scenes": [
-        {{"location": "位置", "description": "场景描述"}},
-        {{"location": "位置", "description": "场景描述"}},
-        {{"location": "位置", "description": "场景描述"}}
+        {{"location": "位置", "description": "叙事性场景描述(中文)", "environment_prompt": "English T2I prompt for pure environment (strictly follow rules below)"}},
+        {{"location": "位置", "description": "叙事性场景描述(中文)", "environment_prompt": "English environment T2I prompt"}},
+        {{"location": "位置", "description": "叙事性场景描述(中文)", "environment_prompt": "English environment T2I prompt"}}
       ],
       "ending_hook": "结尾钩子",
       "characters": ["角色A", "角色B"],
@@ -174,7 +174,23 @@ NARRATION_STORYBOARD_SYSTEM_PROMPT = """你是一个漫剧推广视频策划师�
 
 格式示例：
 "25岁男性，古铜色皮肤，身材高大魁梧，黑色短发，赤膊穿粗布短打，双手厚茧，背负一根生锈铁棍"
-}}"""
+
+【key_scenes.environment_prompt 生成规则】
+这是用于 T2I 生成**纯环境背景图**的提示词（空镜，不含任何人物）。
+**必须用英文撰写**（因为 T2I 模型为英文输入优化）。
+
+必须包含（用英文 Tags/关键词 + 逗号格式）：
+1. Space type & scale: e.g. "spacious corporate lobby, 10-meter ceiling" / "narrow rainy alley, brick walls"
+2. Key objects & furnishings: e.g. "marble reception desk, leather sofas, elevator entrance" / "rusty anvil, charcoal furnace, iron tools on wall"
+3. Materials & color palette: e.g. "dark walnut wood, black leather furniture, cold grey tones" / "green brick stone walls, warm orange firelight"
+4. Lighting & atmosphere: e.g. "cold white daylight from floor-to-ceiling windows, marble floor reflections" / "furnace glow on walls, smoke and haze"
+5. Time/weather (if relevant): e.g. "dusk warm light" / "rainy" / "night cityscape through window"
+
+禁止包含：任何人物(NO people/characters/figures/silhouettes)
+
+格式示例：
+"spacious CEO office, dark walnut desk, black leather high-back chair, floor-to-ceiling window with night cityscape, cold white recessed lighting, marble floor with subtle reflections, bookshelf with neatly arranged folders"
+"""
 
 NARRATION_STORYBOARD_USER_PROMPT = """请阅读以下小说文本，识别有效冲突单元，并按要求输出JSON。
 
@@ -230,41 +246,23 @@ GRID_SHOTS_USER_PROMPT = """【剧本单元】：
 请生成16个分镜的英文 prompt（每个面板为 9:16 竖屏构图）。"""
 
 # Gemini 宫格图生成 prompt 模板 — 9:16 portrait
-GRID_IMAGE_PROMPT_TEMPLATE = """Generate a 4x4 storyboard grid image (16 panels in a single image, 4 rows × 4 columns). The overall image MUST be in 9:16 portrait aspect ratio. Each panel should also be 9:16 portrait.
+# 精简版：导演规则（节奏/镜头语法等）已由 LLM 在 shots 中体现，
+# Gemini 只需要"画家指令"：布局 + 角色一致性 + 面板内容 + 禁止文字
+GRID_IMAGE_PROMPT_TEMPLATE = """You are generating a single 4x4 grid artwork (4 rows × 4 columns = 16 panels). The overall image MUST be in 9:16 PORTRAIT aspect ratio (taller than wide). Each panel MUST also be 9:16 portrait. Panels MUST be clearly separated by visible borders.
 
-【CHARACTER REFERENCES】
+【REFERENCE IMAGES】
 {char_ref_labels}
 
-【CORE INSTRUCTION】
-Use the reference images as the subject anchor. Pay close attention to the spatial layout of the environment, the relative positions of characters and all objects in the scene. Generate coherent sequential storyboard panels from different camera angles that follow the story progression. MAINTAIN ABSOLUTE CONSISTENCY with the reference images' art style. Output the image. Output the image.
-
-【CONSISTENCY RULES】
-- Character faces and costumes MUST be absolutely identical to reference images, quote character fixed descriptions verbatim.
-- No elements that conflict with the genre style.
-- Maintain consistent spatial layout and relative positions of characters and objects.
-
-【CAMERA GRAMMAR】
-- 180-degree rule: do not cross the axis between subjects within the same scene (avoid jump cuts).
-- 30-degree rule: adjacent panels must have >30 degree camera angle difference.
-
-【RHYTHM RULES】
-- Normal scenes: 3-5s per panel, MS/MCU as primary shots.
-- Emotional climax: MCU→CU→ECU progression, no skipping.
-- Action: 1-2s per panel, EWS/WS as primary, use emotion beats not complex choreography.
-- Every 3-4 panels must have a shot scale change.
-
-【ACTION RULES】
-- No complex fight choreography.
-- Use emotion cut points: Wind-up(MCU) → Clash(ECU eyes) → Burst(EWS+FX) → Result(CU expression).
-
-【STRUCTURE RULES】
-- Panels 1-2: Visual hook + emotional hook.
-- Panels 15-16: Suspense or emotional peak.
-
-【16 PANEL DESCRIPTIONS】
+【PANELS — draw each panel exactly as described】
 {shots_text}
 
-Generate a single 4x4 grid image containing all 16 panels. Each panel should be clearly separated. {style_tags}. No text, no numbers, no labels on panels."""
+【RULES】
+- Keep character appearance absolutely consistent across all 16 panels (match reference images).
+- Sequential storytelling: panels flow left-to-right, top-to-bottom.
+- {style_tags}
+- ZERO TEXT on the image: no labels, no letters, no numbers, no captions, no speech bubbles, no annotations of any kind. Pure artwork only.
+
+Generate the 4×4 grid image now. 16 clearly separated panels. MUST be 9:16 PORTRAIT (taller than wide). No text anywhere."""
 
 
 # ── 分镜视频 Prompt（旁白版，无对话字段）──────────────────────────
@@ -527,7 +525,8 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
             for si, scene in enumerate(unit.get("key_scenes", [])):
                 location = scene.get("location", "")
-                description = scene.get("description", "")
+                # 优先用 environment_prompt（纯环境描述），回退到 description
+                env_prompt = scene.get("environment_prompt", "") or scene.get("description", "")
                 asset_key = f"scene_ref:u{un}_s{si+1}"
 
                 if not ctx.candidates.is_invalidated(asset_key):
@@ -544,11 +543,6 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     cid = char_name_map.get(char_name)
                     if cid and cid in ctx.char_images:
                         ref_images.append(ctx.char_images[cid])
-                        char_profile = next(
-                            (cp for cp in ctx.characters
-                             if cp["char_id"] == cid), {})
-                        appearance = char_profile.get(
-                            "appearance_prompt", "")[:80]
                         ref_labels.append(
                             f'Art style reference (DO NOT draw this character, '
                             f'use ONLY for matching art style, color palette, and line work)')
@@ -558,7 +552,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     f"Generate an anime background scene image in 9:16 portrait aspect ratio "
                     f"— EMPTY ENVIRONMENT ONLY. "
                     f"Location: {location}. "
-                    f"Environment description: {description}. "
+                    f"Environment description: {env_prompt}. "
                     f"This is a pure environment/background art with NO characters, NO people, "
                     f"NO human figures, NO silhouettes. Show only the location, architecture, "
                     f"objects, lighting, and atmosphere. "
