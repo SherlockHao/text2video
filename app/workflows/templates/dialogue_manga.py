@@ -17,13 +17,14 @@
 
 import json
 import os
+import re
+import shutil
 import time
 import subprocess
 
 from app.workflows.base import BaseWorkflow, WorkflowContext, StageResult
 from app.workflows.registry import register_workflow
 from app.workflows.interactive import InteractiveOpsMixin
-from vendor.qwen.client import chat_json
 from vendor.jimeng.t2i import generate_image
 from vendor.gemini.client import generate_image_with_refs
 from app.workflows.templates._shared import (
@@ -964,10 +965,6 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
     # Stage 7: Dialogue TTS (台词语音 + 时长校准)
     # ================================================================
     def stage_dialogue_tts(self, ctx: WorkflowContext) -> StageResult:
-        import re
-        import math
-        from app.services.ffmpeg_utils import get_media_duration
-
         import math
         from app.services.ffmpeg_utils import get_media_duration
         from vendor.qwen.tts import qwen_tts
@@ -1319,7 +1316,6 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 char_name = d.get("character", "")
                 content = d.get("content", "")
                 # 去括号注释用于显示
-                import re
                 clean = re.sub(r'（[^）]*）', '', content)
                 clean = re.sub(r'\([^)]*\)', '', clean).strip()
 
@@ -1572,7 +1568,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     ctx.log(f"    ✓ 最终输出: u{un}_output.mp4 ({dur:.1f}s, {size}KB)")
                 else:
                     # BGM 叠加失败，用无 BGM 版本
-                    import shutil; shutil.move(concat_out, final_output)
+                    shutil.move(concat_out, final_output)
                     ctx.log(f"    BGM 叠加失败，使用无 BGM 版本")
             else:
                 os.rename(concat_out, final_output)
@@ -2363,7 +2359,6 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
     def op_reroll_dialogue_tts(self, output_dir: str, unit_number: int,
                                segment_number: int, voice_id: str = None) -> dict:
         """重新生成单个台词段的 TTS。"""
-        import re
         import math
         from app.workflows.candidates import CandidateManager
         from app.services.ffmpeg_utils import get_media_duration

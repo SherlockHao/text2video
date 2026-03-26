@@ -51,6 +51,12 @@ class RerollDialogueTTSRequest(BaseModel):
     voice_id: Optional[str] = None
 
 
+class RerollNarrationTTSRequest(BaseModel):
+    unit_number: int
+    segment_number: int
+    voice_id: Optional[str] = None
+
+
 # ================================================================
 # Workflow listing & execution
 # ================================================================
@@ -199,6 +205,17 @@ async def reroll_dialogue_tts(workflow: str, req: RerollDialogueTTSRequest,
         raise HTTPException(status_code=400, detail=f"Workflow {workflow} does not support dialogue-tts reroll")
     return wf.op_reroll_dialogue_tts(_safe_output_dir(output_dir), req.unit_number, req.segment_number,
                                      voice_id=req.voice_id)
+
+
+@router.post("/{workflow}/reroll/narration-tts")
+async def reroll_narration_tts(workflow: str, req: RerollNarrationTTSRequest,
+                               output_dir: str = Query(..., description="工作流输出目录")):
+    """重新生成旁白 TTS。"""
+    wf = _get_wf(workflow)
+    if not hasattr(wf, "op_reroll_narration_tts"):
+        raise HTTPException(status_code=400, detail=f"Workflow {workflow} does not support narration-tts reroll")
+    return wf.op_reroll_narration_tts(_safe_output_dir(output_dir), req.unit_number, req.segment_number,
+                                      voice_id=req.voice_id)
 
 
 # ================================================================

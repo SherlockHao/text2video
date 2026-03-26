@@ -106,8 +106,17 @@ def cmd_reroll(args):
     elif args.target == "video_segment":
         result = wf.op_reroll_video_segment(args.output, args.unit, args.seg)
     elif args.target == "dialogue_tts":
-        result = wf.op_reroll_dialogue_tts(args.output, args.unit, args.seg,
-                                            voice_id=args.voice)
+        if not hasattr(wf, "op_reroll_dialogue_tts"):
+            result = {"error": f"Workflow '{args.workflow}' does not support dialogue_tts reroll"}
+        else:
+            result = wf.op_reroll_dialogue_tts(args.output, args.unit, args.seg,
+                                                voice_id=args.voice)
+    elif args.target == "narration_tts":
+        if not hasattr(wf, "op_reroll_narration_tts"):
+            result = {"error": f"Workflow '{args.workflow}' does not support narration_tts reroll"}
+        else:
+            result = wf.op_reroll_narration_tts(args.output, args.unit, args.seg,
+                                                 voice_id=args.voice)
     else:
         result = {"error": f"Unknown reroll target: {args.target}"}
     _output(result, args.json)
@@ -236,7 +245,8 @@ p_edit.add_argument("--sub", type=int, default=None, help="Sub-shot index (1-bas
 p_reroll = subparsers.add_parser("reroll", help="Generate new candidate")
 _add_common(p_reroll)
 p_reroll.add_argument("target", choices=["char_ref", "scene_bg", "tts", "first_frame", "video",
-                                        "frame", "video_segment", "dialogue_tts"])
+                                        "frame", "video_segment", "dialogue_tts",
+                                        "narration_tts"])
 p_reroll.add_argument("--char", type=str, help="Character ID")
 p_reroll.add_argument("--scene", type=str, help="Scene ID")
 p_reroll.add_argument("--seg", type=int, help="Segment number")

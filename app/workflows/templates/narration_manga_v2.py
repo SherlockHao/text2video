@@ -38,7 +38,6 @@ from app.workflows.templates._shared import (
     _preprocess_bgm,
     _measure_mean_volume,
 )
-from vendor.qwen.client import chat_json
 from vendor.jimeng.t2i import generate_image
 from vendor.gemini.client import generate_image_with_refs
 

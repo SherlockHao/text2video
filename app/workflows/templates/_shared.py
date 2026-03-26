@@ -151,31 +151,6 @@ def _validated_chat_json(system_prompt, user_prompt, required_keys,
     raise RuntimeError(f"LLM 调用 {LLM_MAX_RETRIES} 次均失败")
 
 
-# ── Qwen TTS 音色匹配 Prompt ─────────────────────────────────
-
-QWEN_VOICE_MATCH_SYSTEM_PROMPT = """你是一个语音导演。根据角色的声音特征描述，从可用音色列表中选择最匹配的音色ID。
-同时为该音色生成一段 TTS instruct 指令（描述说话风格、语速、情感，30-50字中文）。
-
-严格输出JSON格式：
-{{
-  "matches": [
-    {{
-      "char_id": "角色ID",
-      "voice_id": "选中的音色ID",
-      "reason": "选择理由（一句话）",
-      "tts_instructions": "TTS风格指令（中文，描述语速/情感/风格）"
-    }}
-  ]
-}}"""
-
-QWEN_VOICE_MATCH_USER_PROMPT = """【角色列表】：
-{characters_json}
-
-【可用音色】：
-{voices_json}
-
-请为每个角色选择最匹配的音色，并生成 TTS 风格指令。"""
-
 NARRATION_VOICE_MATCH_SYSTEM_PROMPT = """你是一个顶级语音导演。你需要根据剧本的完整信息，为旁白配音选择最合适的音色并设计说话风格。
 
 【选择音色的依据】
