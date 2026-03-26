@@ -1461,6 +1461,10 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 else:
                     ctx.log(f"    ✗ 统一失败: {os.path.basename(c)}")
 
+            if not unified_clips:
+                ctx.log("    无统一后视频")
+                continue
+
             # ── Step C: 拼接 ──
             ctx.log(f"    拼接 {len(unified_clips)} 段...")
             concat_list = f"{ctx.output_dir}/videos/concat_u{un}.txt"
@@ -1738,6 +1742,10 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         with open(sb_path, "w", encoding="utf-8") as f:
             json.dump(sb, f, ensure_ascii=False, indent=2)
         return {"unit": segment, "field": field, "old_value": old_value, "new_value": value}
+
+    def op_reroll_scene_bg(self, output_dir: str, scene_id: str) -> dict:
+        """对话漫剧的场景图使用 Gemini 生成，暂不支持单独 reroll。请删除对应场景图文件后重新运行 stage_scene_refs。"""
+        return {"error": "Scene ref reroll not yet implemented for this workflow. Delete the scene file and re-run the pipeline to regenerate."}
 
     def op_reroll_tts(self, output_dir: str, segment: int,
                       voice: str = None, emotion: str = None) -> dict:
@@ -2032,12 +2040,17 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         elif asset_type == "frames":
             frame_dir = os.path.join(output_dir, "frames")
             if os.path.isdir(frame_dir):
-                for f in sorted(os.listdir(frame_dir)):
-                    if f.endswith(".png"):
-                        result["assets"].append({
-                            "path": os.path.relpath(os.path.join(frame_dir, f), output_dir),
-                            "filename": f,
-                        })
+                for sub in sorted(os.listdir(frame_dir)):
+                    sub_path = os.path.join(frame_dir, sub)
+                    if os.path.isdir(sub_path):
+                        for f in sorted(os.listdir(sub_path)):
+                            if f.endswith(".png"):
+                                result["assets"].append({
+                                    "path": os.path.relpath(
+                                        os.path.join(sub_path, f), output_dir),
+                                    "filename": f,
+                                    "unit": sub,
+                                })
 
         elif asset_type == "videos":
             video_dir = os.path.join(output_dir, "videos")

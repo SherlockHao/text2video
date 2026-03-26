@@ -286,25 +286,26 @@ p_split.add_argument("--verbose", action="store_true")
 p_lw = subparsers.add_parser("list-workflows", help="List available workflows")
 _add_common(p_lw)
 
-args = parser.parse_args()
+if __name__ == "__main__":
+    args = parser.parse_args()
 
-if args.command == "run":
-    cmd_run(args)
-elif args.command == "review":
-    cmd_review(args)
-elif args.command == "edit":
-    cmd_edit(args)
-elif args.command == "reroll":
-    cmd_reroll(args)
-elif args.command == "select":
-    cmd_select(args)
-elif args.command == "list-candidates":
-    cmd_list_candidates(args)
-elif args.command == "split":
-    cmd_split(args)
-elif args.command == "list-workflows":
-    cmd_list_workflows(args)
-elif args.command is None:
-    parser.print_help()
-else:
-    parser.print_help()
+    if args.command == "run":
+        cmd_run(args)
+    elif args.command == "review":
+        cmd_review(args)
+    elif args.command == "edit":
+        cmd_edit(args)
+    elif args.command == "reroll":
+        cmd_reroll(args)
+    elif args.command == "select":
+        cmd_select(args)
+    elif args.command == "list-candidates":
+        cmd_list_candidates(args)
+    elif args.command == "split":
+        cmd_split(args)
+    elif args.command == "list-workflows":
+        cmd_list_workflows(args)
+    elif args.command is None:
+        parser.print_help()
+    else:
+        parser.print_help()

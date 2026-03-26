@@ -2184,6 +2184,10 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # Reroll 操作（旁白漫剧 V2 专用覆写）
     # ================================================================
 
+    def op_reroll_scene_bg(self, output_dir: str, scene_id: str) -> dict:
+        """旁白漫剧 V2 的场景图使用 Gemini 生成，暂不支持单独 reroll。请删除对应场景图文件后重新运行 stage_scene_refs。"""
+        return {"error": "Scene ref reroll not yet implemented for this workflow. Delete the scene file and re-run the pipeline to regenerate."}
+
     def op_reroll_tts(self, output_dir: str, segment: int,
                       voice: str = None, emotion: str = None) -> dict:
         """旁白漫剧 V2 不使用 narration_manga TTS reroll，
