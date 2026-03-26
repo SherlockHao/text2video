@@ -779,20 +779,23 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     cid = char_name_map.get(char_name)
                     if cid and cid in ctx.char_images:
                         ref_images.append(ctx.char_images[cid])
-                        char_profile = next((c for c in ctx.characters if c["char_id"] == cid), {})
-                        appearance = char_profile.get("appearance_prompt", "")[:80]
                         ref_labels.append(
-                            f'Character reference for "{char_name}": {appearance}'
+                            f'Art style reference (DO NOT draw this character, '
+                            f'use ONLY for matching art style, color palette, and line work)'
                         )
 
-                # Gemini prompt
+                # Gemini prompt — 纯环境空镜，不含人物
                 prompt = (
-                    f"Generate an anime scene image. "
+                    f"Generate an anime background scene image — EMPTY ENVIRONMENT ONLY. "
                     f"Location: {location}. "
-                    f"Scene description: {description}. "
-                    f"Use the character reference images to maintain character consistency. "
+                    f"Environment description: {description}. "
+                    f"This is a pure environment/background art with NO characters, NO people, "
+                    f"NO human figures, NO silhouettes. Show only the location, architecture, "
+                    f"objects, lighting, and atmosphere. "
+                    f"Use the reference images ONLY to match the art style (color palette, "
+                    f"line style, cel-shading level), NOT to include any characters. "
                     f"Anime style, manga aesthetic, dramatic lighting, high quality, 16:9 aspect ratio. "
-                    f"No text, no watermark."
+                    f"No text, no watermark, no characters."
                 )
 
                 version = ctx.candidates.next_version(asset_key)

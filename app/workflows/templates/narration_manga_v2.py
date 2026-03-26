@@ -530,16 +530,22 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                         appearance = char_profile.get(
                             "appearance_prompt", "")[:80]
                         ref_labels.append(
-                            f'Character reference for "{char_name}": '
-                            f'{appearance}')
+                            f'Art style reference (DO NOT draw this character, '
+                            f'use ONLY for matching art style, color palette, and line work)')
 
+                # 纯环境空镜，不含人物
                 prompt = (
-                    f"Generate an anime scene image in 9:16 portrait aspect ratio. "
+                    f"Generate an anime background scene image in 9:16 portrait aspect ratio "
+                    f"— EMPTY ENVIRONMENT ONLY. "
                     f"Location: {location}. "
-                    f"Scene description: {description}. "
-                    f"Use the character reference images to maintain character consistency. "
+                    f"Environment description: {description}. "
+                    f"This is a pure environment/background art with NO characters, NO people, "
+                    f"NO human figures, NO silhouettes. Show only the location, architecture, "
+                    f"objects, lighting, and atmosphere. "
+                    f"Use the reference images ONLY to match the art style (color palette, "
+                    f"line style, cel-shading level), NOT to include any characters. "
                     f"Anime style, manga aesthetic, dramatic lighting, high quality. "
-                    f"No text, no watermark."
+                    f"No text, no watermark, no characters."
                 )
 
                 version = ctx.candidates.next_version(asset_key)
