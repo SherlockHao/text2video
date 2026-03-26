@@ -5,7 +5,7 @@
 10 Stages:
   1. storyboard        — LLM 分镜（含角色对话 + 角色档案）
   2. char_refs         — 角色三视图参考图 (Jimeng T2I)
-  3. char_voices       — 角色音色库 (LLM 匹配 + MiniMax TTS + 回忆混响)
+  3. char_voices       — 角色音色库 (LLM 匹配 + Qwen TTS + 回忆混响)
   4. scene_refs        — 场景参考图 (Gemini + 角色参考)
   5. storyboard_grids  — 4×4 宫格分镜图 (Gemini 4K)
   6. video_prompts     — 4K 切图 + LLM 分镜视频指令 (15段)
@@ -18,7 +18,6 @@
 import json
 import os
 import time
-import asyncio
 import subprocess
 
 from app.workflows.base import BaseWorkflow, WorkflowContext, StageResult
@@ -27,163 +26,22 @@ from app.workflows.interactive import InteractiveOpsMixin
 from vendor.qwen.client import chat_json
 from vendor.jimeng.t2i import generate_image
 from vendor.gemini.client import generate_image_with_refs
-from app.workflows.templates._shared import _preprocess_bgm
+from app.workflows.templates._shared import (
+    _preprocess_bgm,
+    _resolve_cjk_font,
+    _ffmpeg_safe_text,
+    _strip_shot_labels,
+    _detect_grid_panels,
+    _validated_chat_json,
+    _measure_mean_volume,
+)
 
 # ── 常量 ─────────────────────────────────────────────────────────
 
 MAX_INPUT_LENGTH = 15000  # 最大输入字数
 LLM_MAX_RETRIES = 3       # LLM 输出校验失败重试次数
 
-import re as _re_module
-
-def _resolve_cjk_font() -> str:
-    """跨平台 CJK 字体查找，返回可用字体路径。"""
-    candidates = [
-        # macOS
-        "/System/Library/AssetsV2/com_apple_MobileAsset_Font7/3419f2a427639ad8c8e139149a287865a90fa17e.asset/AssetData/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        # Linux (apt install fonts-noto-cjk)
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-        # Fallback: DejaVu (no CJK but won't crash)
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    return ""
-
-
-def _ffmpeg_safe_text(text: str) -> str:
-    """转义文本用于 FFmpeg drawtext filter，防止命令注入。"""
-    # FFmpeg drawtext 需要转义: \ ' : % ; [ ]
-    text = text.replace("\\", "\\\\\\\\")
-    text = text.replace("'", "'\\\\\\\\''")
-    text = text.replace(":", "\\\\:")
-    text = text.replace("%", "%%")
-    text = text.replace(";", "\\\\;")
-    text = text.replace("[", "\\\\[")
-    text = text.replace("]", "\\\\]")
-    return text
-
-
-def _detect_grid_panels(grid_img):
-    """检测 4x4 宫格图的分隔线，返回 4x4 的 crop box 列表。
-
-    Returns:
-        list[list[tuple]]: crop_boxes[row][col] = (x1, y1, x2, y2)
-    """
-    import numpy as np
-    arr = np.array(grid_img)
-    col_bright = arr.mean(axis=(0, 2))
-    row_bright = arr.mean(axis=(1, 2))
-    bright_thresh = 200
-
-    def _find_seps(brightness, n=3):
-        bright_idx = np.where(brightness > bright_thresh)[0]
-        if len(bright_idx) == 0:
-            return []
-        regions = []
-        start = bright_idx[0]
-        for i in range(1, len(bright_idx)):
-            if bright_idx[i] - bright_idx[i-1] > 5:
-                regions.append((int(start), int(bright_idx[i-1])))
-                start = bright_idx[i]
-        regions.append((int(start), int(bright_idx[-1])))
-        total = len(brightness)
-        inner = [(s, e) for s, e in regions if s > total * 0.05 and e < total * 0.95]
-        return inner[:n]
-
-    v_seps = _find_seps(col_bright, 3)
-    h_seps = _find_seps(row_bright, 3)
-
-    if len(v_seps) == 3 and len(h_seps) == 3:
-        col_l = [0] + [s[1] + 1 for s in v_seps]
-        col_r = [s[0] for s in v_seps] + [grid_img.width]
-        row_t = [0] + [s[1] + 1 for s in h_seps]
-        row_b = [s[0] for s in h_seps] + [grid_img.height]
-        # 去掉外边框
-        left_border = np.where(col_bright[:50] > bright_thresh)[0]
-        if len(left_border) > 0:
-            col_l[0] = int(left_border[-1]) + 1
-        right_border = np.where(col_bright[-50:] > bright_thresh)[0]
-        if len(right_border) > 0:
-            col_r[3] = grid_img.width - 50 + int(right_border[0])
-        boxes = [[( col_l[c], row_t[r], col_r[c], row_b[r] )
-                  for c in range(4)] for r in range(4)]
-    else:
-        # fallback: 等分
-        cw, ch = grid_img.width // 4, grid_img.height // 4
-        boxes = [[(c*cw, r*ch, (c+1)*cw, (r+1)*ch)
-                  for c in range(4)] for r in range(4)]
-
-    # 返回精确 crop boxes + resize_target 标记
-    # 调用方先 crop 去白边，再 resize 到统一的 16:9 尺寸
-    # resize_target: 以最大面板宽度为基准，高度按 9/16 计算
-    all_w = [b[2]-b[0] for row in boxes for b in row]
-    max_w = max(all_w)
-    target_w = max_w if max_w % 2 == 0 else max_w + 1
-    target_h = round(target_w * 9 / 16)
-    if target_h % 2 == 1:
-        target_h += 1
-
-    return boxes, (target_w, target_h)
-
-
-def _strip_shot_labels(text: str) -> str:
-    """去掉 prompt 开头的景别缩写（EWS, CU, MS 等）避免 Gemini 渲染为文字"""
-    return _re_module.sub(
-        r'^(Extreme Wide Shot|EWS|Wide Shot|WS|Long Shot|LS|'
-        r'Medium Shot|MS|Medium Close[- ]?Up|MCU|Close[- ]?Up|CU|'
-        r'Extreme Close[- ]?Up|ECU|POV|Full Shot|FS|'
-        r'Low [Aa]ngle|High [Aa]ngle|Silhouette [Ss]hot|Final [Cc]lose[- ]?[Uu]p)'
-        r'[,\s]+', '', text).strip()
-
-
-def _validated_chat_json(system_prompt, user_prompt, required_keys,
-                         temperature=0.5, max_tokens=8192, list_key=None,
-                         list_length=None):
-    """调用 LLM 并校验返回 JSON 的必需字段，失败重试。
-
-    Args:
-        required_keys: 顶层必需字段列表
-        list_key: 如果指定，检查该字段是否为列表
-        list_length: 如果指定，检查列表长度是否匹配
-    """
-    for attempt in range(LLM_MAX_RETRIES):
-        try:
-            result = chat_json(system_prompt, user_prompt,
-                               temperature=temperature, max_tokens=max_tokens)
-
-            # 校验顶层字段
-            missing = [k for k in required_keys if k not in result]
-            if missing:
-                print(f"  LLM 校验失败 (attempt {attempt+1}): 缺少字段 {missing}")
-                continue
-
-            # 校验列表字段
-            if list_key:
-                lst = result.get(list_key, [])
-                if not isinstance(lst, list) or len(lst) == 0:
-                    print(f"  LLM 校验失败 (attempt {attempt+1}): {list_key} 非列表或为空")
-                    continue
-                if list_length and len(lst) != list_length:
-                    print(f"  LLM 校验失败 (attempt {attempt+1}): "
-                          f"{list_key} 长度 {len(lst)} != {list_length}")
-                    continue
-
-            return result
-
-        except Exception as e:
-            print(f"  LLM 调用异常 (attempt {attempt+1}): {e}")
-
-    raise RuntimeError(f"LLM 调用 {LLM_MAX_RETRIES} 次均失败")
-
-# MiniMax 可用中文音色
-# 使用 Qwen TTS 音色
+# Qwen TTS 音色
 from vendor.qwen.tts import QWEN_VOICES
 
 # LLM 音色匹配 Prompt (Qwen TTS 版)
@@ -614,7 +472,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
     def stage_char_voices(self, ctx: WorkflowContext) -> StageResult:
         os.makedirs(f"{ctx.output_dir}/characters", exist_ok=True)
 
-        # ── Step 1: LLM 匹配 voice_trait → MiniMax voice_id ──
+        # ── Step 1: LLM 匹配 voice_trait → Qwen TTS voice_id ──
         voice_map_path = f"{ctx.output_dir}/voice_map.json"
 
         if os.path.exists(voice_map_path) and os.path.getsize(voice_map_path) > 10:
@@ -1700,8 +1558,9 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     "ffmpeg", "-y",
                     "-i", concat_out, "-i", bgm_path,
                     "-filter_complex",
+                    f"[0:a]volume=-20dB[vid];"
                     f"[1:a]volume={adjust_db:.1f}dB,afade=t=out:st={fade_out_start:.0f}:d=1[bgm];"
-                    f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    f"[vid][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                     "-map", "0:v", "-map", "[aout]",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                     final_output,
@@ -1866,7 +1725,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
         # dialogue_tts
         audio_dir = os.path.join(output_dir, "audio")
-        tts_files = [f for f in os.listdir(audio_dir) if f.endswith(".mp3")] if os.path.isdir(audio_dir) else []
+        tts_files = [f for f in os.listdir(audio_dir) if f.endswith(".mp3") or f.endswith(".wav")] if os.path.isdir(audio_dir) else []
         stages_status["dialogue_tts"] = "completed" if tts_files else "pending"
 
         # video_gen

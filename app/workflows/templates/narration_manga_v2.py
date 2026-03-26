@@ -22,7 +22,6 @@ import re
 import shutil
 import subprocess
 import time
-import asyncio
 import base64
 
 import requests as http_requests
@@ -69,27 +68,6 @@ CAMERA_MAP = {
     "dolly_in": "镜头平滑向前推进",
     "tilt_up": "镜头缓慢上摇",
     "tilt_down": "镜头缓慢下摇",
-}
-
-# MiniMax 可用中文音色（旁白用）
-MINIMAX_NARRATOR_VOICES = {
-    "female-shaonv": "少女音，清亮活泼的年轻女声",
-    "female-yujie": "御姐音，成熟知性的女声",
-    "female-chengshu": "成熟女性，温柔沉稳",
-    "female-tianmei": "甜美女性，柔软甜蜜",
-    "presenter_female": "女性主持人，端庄大方",
-    "audiobook_female_1": "女性有声书1，温柔叙述",
-    "audiobook_female_2": "女性有声书2，知性讲述",
-    "Wise_Woman": "智慧女性，从容淡定",
-    "Calm_Woman": "沉静女性，安宁平和",
-    "male-qn-qingse": "青涩青年，年轻清爽的男声",
-    "male-qn-jingying": "精英青年，沉稳干练的男声",
-    "male-qn-badao": "霸道青年，低沉有力的男声",
-    "presenter_male": "男性主持人，标准浑厚",
-    "audiobook_male_1": "男性有声书1，温和叙述",
-    "audiobook_male_2": "男性有声书2，沉稳讲述",
-    "Deep_Voice_Man": "低沉男声，深邃有磁性",
-    "Imposing_Manner": "威严男声，气场强大",
 }
 
 
@@ -1874,7 +1852,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         audio_dir = os.path.join(output_dir, "audio")
         tts_files = (
             [f for f in os.listdir(audio_dir)
-             if f.endswith("_narration.mp3")]
+             if f.endswith("_narration.mp3") or f.endswith("_narration.wav")]
             if os.path.isdir(audio_dir) else [])
         stages_status["narration_tts"] = (
             "completed" if tts_files else "pending")
@@ -2230,31 +2208,24 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 "success": False,
                 "message": f"段 {segment_number} 无旁白文字"}
 
-        final_voice = voice_id or "female-shaonv"
-        emotion = seg.get("emotion", "calm")
-        valid_emotions = {
-            "happy", "sad", "angry", "fearful",
-            "disgusted", "surprised", "calm", "fluent",
-        }
-        if emotion == "whisper":
-            emotion = "calm"
-        if emotion not in valid_emotions:
-            emotion = "calm"
+        # Load voice config from narration_voice.json
+        voice_config_path = os.path.join(output_dir, "narration_voice.json")
+        if os.path.exists(voice_config_path):
+            with open(voice_config_path) as f:
+                voice_config = json.load(f)
+            final_voice = voice_id or voice_config.get("voice_id", "Serena")
+            instructions = voice_config.get("tts_instructions", None)
+        else:
+            final_voice = voice_id or "Serena"
+            instructions = None
 
-        async def _gen():
-            from app.ai.providers.minimax_tts import MiniMaxTTSProvider
-            provider = MiniMaxTTSProvider()
-            job_id = await provider.submit_job({
-                "text": narration,
-                "voice_id": final_voice,
-                "speed": 0.9,
-                "emotion": emotion,
-            })
-            status = await provider.poll_job(job_id)
-            return status.result_data
-
+        from vendor.qwen.tts import qwen_tts
         try:
-            data = asyncio.run(_gen())
+            data = qwen_tts(
+                text=narration,
+                voice=final_voice,
+                instructions=instructions,
+            )
         except Exception as e:
             return {"success": False, "message": f"TTS 生成失败: {e}"}
 
@@ -2268,7 +2239,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         audio_path = os.path.join(
             output_dir, "audio",
             f"u{unit_number}_seg{segment_number:02d}"
-            f"_narration_v{version}.mp3")
+            f"_narration_v{version}.wav")
         with open(audio_path, "wb") as f:
             f.write(data)
 
