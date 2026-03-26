@@ -1408,16 +1408,19 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
             ctx.log(f"\n  ── 单元 {un}: 组装 ({len(segments)} 段) ──")
 
-            # ── Step A: 收集各段视频（字幕版优先） ──
+            # ── Step A: 收集各段视频（字幕版优先），建立 seg→clip 映射 ──
             clip_paths = []
-            for seg in segments:
+            seg_to_clip = {}  # segment index → clip index
+            for seg_i, seg in enumerate(segments):
                 sn = seg["segment_number"]
                 subtitled = f"{ctx.output_dir}/videos/u{un}_seg{sn:02d}_subtitled.mp4"
                 raw = f"{ctx.output_dir}/videos/u{un}_seg{sn:02d}_final.mp4"
 
                 if os.path.exists(subtitled) and os.path.getsize(subtitled) > 1000:
+                    seg_to_clip[seg_i] = len(clip_paths)
                     clip_paths.append(subtitled)
                 elif os.path.exists(raw) and os.path.getsize(raw) > 1000:
+                    seg_to_clip[seg_i] = len(clip_paths)
                     clip_paths.append(raw)
                 else:
                     ctx.log(f"    段{sn}: ✗ 视频不存在，跳过")
@@ -1429,6 +1432,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
             # ── Step B: 统一 1280x720 @30fps ──
             ctx.log(f"    统一 1280x720 @30fps...")
             unified_clips = []
+            clip_to_unified = {}  # clip index → unified index
             for i, c in enumerate(clip_paths):
                 unified = f"{ctx.output_dir}/videos/u{un}_unified_{i:02d}.mp4"
 
@@ -1453,6 +1457,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
                 result = subprocess.run(cmd, capture_output=True, timeout=30)
                 if result.returncode == 0:
+                    clip_to_unified[i] = len(unified_clips)
                     unified_clips.append(unified)
                 else:
                     ctx.log(f"    ✗ 统一失败: {os.path.basename(c)}")
@@ -1474,6 +1479,82 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
             video_dur = get_media_duration(concat_out)
             ctx.log(f"    拼接完成: {video_dur:.1f}s")
+
+            # ── Step C2: 补充对话音轨（lip-sync 被跳过的对话段）──
+            # lip-sync 被跳过的情况：is_memory=True 或 facing 含"背"
+            # 这些段的视频 sound=off（静音），TTS 音频存在但未混入视频
+            dialogue_patch_path = os.path.join(
+                ctx.output_dir, "audio", f"u{un}_dialogue_patch.wav")
+            has_patch = False
+
+            # 计算每个 unified clip 的时间偏移
+            clip_offsets = []
+            offset = 0.0
+            for c in unified_clips:
+                clip_offsets.append(offset)
+                offset += get_media_duration(c) if os.path.exists(c) else 3.0
+
+            # 收集需要补充的 TTS（通过 seg→clip→unified 映射定位时间偏移）
+            patch_inputs = []
+            patch_delays = []
+            for seg_i, seg in enumerate(segments):
+                if not seg.get("is_dialogue") or not seg.get("tts_path"):
+                    continue
+                tts_path = seg["tts_path"]
+                if not os.path.exists(tts_path):
+                    continue
+                # 判断这段是否 lip-sync 被跳过
+                is_memory = seg.get("is_memory", False)
+                facing = seg.get("dialogue", {}).get("facing", "")
+                was_lipsynced = not is_memory and "背" not in facing
+                if was_lipsynced:
+                    continue  # lip-sync 已处理，不需要补充
+                # 通过映射找到正确的时间偏移
+                ci = seg_to_clip.get(seg_i)
+                if ci is None:
+                    continue  # 视频缺失，跳过
+                ui = clip_to_unified.get(ci)
+                if ui is None or ui >= len(clip_offsets):
+                    continue  # 统一失败，跳过
+                delay_ms = int(clip_offsets[ui] * 1000)
+                patch_inputs.append(tts_path)
+                patch_delays.append(delay_ms)
+                ctx.log(f"    段{seg['segment_number']}: 补充对话音轨 "
+                        f"(offset={clip_offsets[ui]:.1f}s, "
+                        f"{'回忆' if is_memory else '背对'})")
+
+            if patch_inputs:
+                # 构建补充音轨：静音基底 + adelay 插入各段 TTS
+                cmd = ["ffmpeg", "-y"]
+                cmd += ["-f", "lavfi", "-i",
+                        f"anullsrc=r=44100:cl=stereo:d={video_dur:.2f}"]
+                for tp in patch_inputs:
+                    cmd += ["-i", tp]
+
+                filter_parts = []
+                mix_labels = ["[0:a]"]
+                for j, delay_ms in enumerate(patch_delays):
+                    label = f"dlg{j}"
+                    filter_parts.append(
+                        f"[{j+1}:a]adelay={delay_ms}|{delay_ms},"
+                        f"apad=whole_dur={video_dur:.2f}[{label}]")
+                    mix_labels.append(f"[{label}]")
+
+                n = len(mix_labels)
+                mix_str = "".join(mix_labels)
+                filter_parts.append(
+                    f"{mix_str}amix=inputs={n}:duration=first:normalize=0[out]")
+
+                cmd += ["-filter_complex", ";".join(filter_parts),
+                        "-map", "[out]",
+                        "-c:a", "pcm_s16le", dialogue_patch_path]
+
+                result = subprocess.run(cmd, capture_output=True, timeout=60)
+                if result.returncode == 0 and os.path.exists(dialogue_patch_path):
+                    has_patch = True
+                    ctx.log(f"    补充对话音轨: ✓ ({len(patch_inputs)} 段)")
+                else:
+                    ctx.log(f"    补充对话音轨: ✗ 构建失败")
 
             # ── Step D: BGM 生成 + 叠加 ──
             bgm_path = f"{ctx.output_dir}/audio/u{un}_bgm.mp3"
@@ -1550,13 +1631,36 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 ctx.log(f"    BGM: mean={bgm_mean_db:.1f}dB max={bgm_max_db:.1f}dB → adjust={adjust_db:.1f}dB → target≈{bgm_target_db}dB")
 
                 fade_out_start = max(0, video_dur - 1)
+
+                # 构建音频混合：2层或3层（有补充对话音轨时）
+                inputs = ["-i", concat_out, "-i", bgm_path]
+                filter_parts = [
+                    f"[0:a]volume=-20dB[vid]",
+                    f"[1:a]volume={adjust_db:.1f}dB,"
+                    f"afade=t=out:st={fade_out_start:.0f}:d=1[bgm]",
+                ]
+                if has_patch:
+                    inputs += ["-i", dialogue_patch_path]
+                    # 补充对话音轨：测量并调整到 -15dB
+                    patch_mean, patch_max = _measure_mean_volume(
+                        dialogue_patch_path, duration=video_dur)
+                    patch_adjust = -15 - patch_mean
+                    if patch_adjust > 0 and patch_max + patch_adjust > -1.0:
+                        patch_adjust = min(patch_adjust, -1.0 - patch_max)
+                    filter_parts.append(f"[2:a]volume={patch_adjust:.1f}dB[dlg]")
+                    filter_parts.append(
+                        "[vid][bgm][dlg]amix=inputs=3:"
+                        "duration=first:dropout_transition=2[aout]")
+                    ctx.log(f"    混合: 3层 (视频-20dB + BGM + 补充对话-15dB)")
+                else:
+                    filter_parts.append(
+                        "[vid][bgm]amix=inputs=2:"
+                        "duration=first:dropout_transition=2[aout]")
+
                 cmd = [
                     "ffmpeg", "-y",
-                    "-i", concat_out, "-i", bgm_path,
-                    "-filter_complex",
-                    f"[0:a]volume=-20dB[vid];"
-                    f"[1:a]volume={adjust_db:.1f}dB,afade=t=out:st={fade_out_start:.0f}:d=1[bgm];"
-                    f"[vid][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    *inputs,
+                    "-filter_complex", ";".join(filter_parts),
                     "-map", "0:v", "-map", "[aout]",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                     final_output,
