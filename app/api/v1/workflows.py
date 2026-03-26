@@ -21,7 +21,7 @@ class WorkflowRunRequest(BaseModel):
     workflow: str = "narration_manga"
     input_text: str
     duration: int = 40
-    voice: str = "female-shaonv"
+    voice: str = "Serena"
     output_dir: str = "e2e_output/default"
     stop_after_stage: Optional[str] = None
     stop_after_segment: Optional[int] = None

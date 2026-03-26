@@ -217,7 +217,7 @@ def _add_common(p):
 p_run = subparsers.add_parser("run", help="Execute full pipeline")
 _add_common(p_run)
 p_run.add_argument("--duration", type=int, default=40)
-p_run.add_argument("--voice", type=str, default="female-shaonv")
+p_run.add_argument("--voice", type=str, default="Serena")
 p_run.add_argument("--input", type=str, default="data/test_novel.txt")
 p_run.add_argument("--stop-after-stage", type=str, default=None)
 p_run.add_argument("--stop-after-segment", type=int, default=None)

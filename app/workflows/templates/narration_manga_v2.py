@@ -861,7 +861,6 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # Stage 6: Narration TTS (单旁白 + 时长校准)
     # ================================================================
     def stage_narration_tts(self, ctx: WorkflowContext) -> StageResult:
-        import math
         from app.services.ffmpeg_utils import get_media_duration
         from vendor.qwen.tts import qwen_tts, QWEN_VOICES
         from app.workflows.templates._shared import (
@@ -1322,9 +1321,10 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
             ctx.log(f"\n  -- 单元 {un}: 组装 ({len(segments)} 段) --")
 
-            # -- Step A: 收集各段视频（字幕版优先） --
+            # -- Step A: 收集各段视频（字幕版优先），建立 seg→clip 映射 --
             clip_paths = []
-            for seg in segments:
+            seg_to_clip = {}  # segment index → clip index
+            for seg_i, seg in enumerate(segments):
                 sn = seg["segment_number"]
                 subtitled = os.path.join(
                     ctx.output_dir, "videos",
@@ -1335,9 +1335,11 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
                 if (os.path.exists(subtitled)
                         and os.path.getsize(subtitled) > 1000):
+                    seg_to_clip[seg_i] = len(clip_paths)
                     clip_paths.append(subtitled)
                 elif (os.path.exists(raw)
                       and os.path.getsize(raw) > 1000):
+                    seg_to_clip[seg_i] = len(clip_paths)
                     clip_paths.append(raw)
                 else:
                     ctx.log(f"    段{sn}: ✗ 视频不存在，跳过")
@@ -1349,6 +1351,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             # -- Step B: 统一 720x1280 @30fps (9:16 portrait) --
             ctx.log("    统一 720x1280 @30fps...")
             unified_clips = []
+            clip_to_unified = {}  # clip index → unified index
             for i, c in enumerate(clip_paths):
                 unified = os.path.join(
                     ctx.output_dir, "videos",
@@ -1387,6 +1390,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 result = subprocess.run(
                     cmd, capture_output=True, timeout=60)
                 if result.returncode == 0:
+                    clip_to_unified[i] = len(unified_clips)
                     unified_clips.append(unified)
                 else:
                     ctx.log(f"    ✗ 统一失败: {os.path.basename(c)}")
@@ -1423,8 +1427,16 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             narration_track = os.path.join(
                 ctx.output_dir, "audio",
                 f"u{un}_narration_track.mp3")
+            # Build seg→unified mapping for narration track alignment
+            seg_to_unified = {}
+            for si, ci in seg_to_clip.items():
+                ui_idx = clip_to_unified.get(ci)
+                if ui_idx is not None:
+                    seg_to_unified[si] = ui_idx
+
             self._build_narration_track(
-                ctx, segments, unified_clips, un, narration_track)
+                ctx, segments, unified_clips, un, narration_track,
+                seg_to_unified=seg_to_unified)
 
             # -- Step E: BGM 生成 --
             bgm_path = os.path.join(
@@ -1617,7 +1629,6 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             concat_out = os.path.join(
                 ctx.output_dir, "videos", f"u{un}_concat.mp4")
             if os.path.exists(concat_out):
-                sample = str(min(15, dur / 2))
                 vc_mean, _ = _measure_mean_volume(concat_out)
                 vf_mean, _ = _measure_mean_volume(final_output)
                 diff = abs(vc_mean - vf_mean)
@@ -1681,15 +1692,20 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # ================================================================
 
     def _build_narration_track(self, ctx, segments, unified_clips,
-                               unit_number, output_path):
+                               unit_number, output_path,
+                               seg_to_unified=None):
         """将各段旁白 TTS 按时序拼成一条完整旁白音轨。
 
         对每段视频，如有 TTS 则在该段起始时刻插入旁白音频，
         无 TTS 的段落保持静音。
+
+        seg_to_unified: dict mapping segment index → unified clip index,
+            used to correctly align segments to time offsets when some
+            segments have missing/failed videos.
         """
         from app.services.ffmpeg_utils import get_media_duration
 
-        # 计算各段起始时间
+        # 计算各 unified clip 的起始时间
         offsets = []
         current_offset = 0.0
         for i, c in enumerate(unified_clips):
@@ -1712,10 +1728,18 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             tts_path = seg.get("tts_path", "")
             if not tts_path or not os.path.exists(tts_path):
                 continue
-            if i >= len(offsets):
-                continue
 
-            delay_ms = int(offsets[i] * 1000)
+            # Use seg_to_unified mapping if available, else fall back to index
+            if seg_to_unified is not None:
+                ui_idx = seg_to_unified.get(i)
+                if ui_idx is None or ui_idx >= len(offsets):
+                    continue
+            else:
+                ui_idx = i
+                if ui_idx >= len(offsets):
+                    continue
+
+            delay_ms = int(offsets[ui_idx] * 1000)
             tts_inputs.append(tts_path)
             adelay_parts.append((input_idx, delay_ms))
             input_idx += 1
@@ -1941,7 +1965,6 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             entry = {
                 "segment_number": sn,
                 "start_frame": seg.get("start_frame"),
-                "end_frame": seg.get("end_frame"),
                 "is_memory": seg.get("is_memory", False),
                 "camera_type": seg.get("camera_type", ""),
                 "camera_movement": seg.get("camera_movement", ""),

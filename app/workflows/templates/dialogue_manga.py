@@ -1512,14 +1512,14 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 ci = seg_to_clip.get(seg_i)
                 if ci is None:
                     continue  # 视频缺失，跳过
-                ui = clip_to_unified.get(ci)
-                if ui is None or ui >= len(clip_offsets):
+                unified_idx = clip_to_unified.get(ci)
+                if unified_idx is None or unified_idx >= len(clip_offsets):
                     continue  # 统一失败，跳过
-                delay_ms = int(clip_offsets[ui] * 1000)
+                delay_ms = int(clip_offsets[unified_idx] * 1000)
                 patch_inputs.append(tts_path)
                 patch_delays.append(delay_ms)
                 ctx.log(f"    段{seg['segment_number']}: 补充对话音轨 "
-                        f"(offset={clip_offsets[ui]:.1f}s, "
+                        f"(offset={clip_offsets[unified_idx]:.1f}s, "
                         f"{'回忆' if is_memory else '背对'})")
 
             if patch_inputs:
@@ -1794,7 +1794,6 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         stages_status["char_refs"] = "completed" if char_refs else "pending"
 
         # voice
-        voice_map_path = os.path.join(output_dir, "voice_map.json")
         voice_lib_path = os.path.join(output_dir, "characters", "voice_library.json")
         stages_status["char_voices"] = "completed" if os.path.exists(voice_lib_path) else "pending"
 
@@ -1831,6 +1830,10 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         video_dir = os.path.join(output_dir, "videos")
         video_files = [f for f in os.listdir(video_dir) if f.endswith(".mp4")] if os.path.isdir(video_dir) else []
         stages_status["video_gen"] = "completed" if video_files else "pending"
+
+        # subtitle_burn
+        subtitled_files = [f for f in os.listdir(video_dir) if "subtitled" in f and f.endswith(".mp4")] if os.path.isdir(video_dir) else []
+        stages_status["subtitle_burn"] = "completed" if subtitled_files else "pending"
 
         # assembly — 实际输出是 videos/u{n}_output.mp4
         output_videos = [f for f in (os.listdir(video_dir) if os.path.isdir(video_dir) else [])
@@ -1934,7 +1937,6 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
             entry = {
                 "segment_number": sn,
                 "start_frame": seg.get("start_frame"),
-                "end_frame": seg.get("end_frame"),
                 "is_dialogue": seg.get("is_dialogue", False),
                 "is_memory": seg.get("is_memory", False),
                 "camera_type": seg.get("camera_type", ""),
