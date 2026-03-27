@@ -416,9 +416,9 @@
       </ul>
     </div>
     <div class="detail-box">
-      <strong>Step B: LLM 生成 15 段指令</strong>
+      <strong>Step B: LLM 生成 16 段指令</strong>
       <ul>
-        <li>相邻两帧组成一段 (帧N → 帧N+1)</li>
+        <li>每帧对应一段 (16 帧 → 16 段)</li>
         <li>每段: is_dialogue / is_memory / dialogue / facing</li>
         <li>时长估算: 台词=字数÷4s, 动作=3-5s</li>
         <li>输出: <code>video_segments_u{n}.json</code></li>
@@ -576,7 +576,7 @@
         <li>ElevenLabs Music API 生成 BGM</li>
         <li>BGM 预处理: compand + dynaudnorm (3s窗口, maxgain=25dB) 拉平首尾弱音量</li>
         <li>目标音量 -28dB · 无淡入 + 淡出 1s · dB 精确对标 · 防 clipping</li>
-        <li>amix 混合：原始音频 + BGM</li>
+        <li>三层混合: video(-20dB) + BGM(-28dB) + dialogue_patch(-15dB, 非lip-sync段)</li>
       </ul>
     </div>
     <div class="detail-box">
@@ -658,7 +658,7 @@
       <tr><td><code>review storyboard</code></td><td>所有 units 摘要 (title/conflict/emotion/characters/dialogue_count) + character_profiles</td></tr>
       <tr><td><code>review status</code></td><td>10 个 stage 完成状态 + 各类资产数量统计</td></tr>
       <tr><td><code>review characters</code></td><td>角色三视图路径 + 音色信息 (voice_id/tts_instructions/samples)</td></tr>
-      <tr><td><code>review unit {n}</code></td><td>指定 unit 的 15 段分镜详情 (帧路径/视频路径/TTS路径/时长)</td></tr>
+      <tr><td><code>review unit {n}</code></td><td>指定 unit 的 16 段分镜详情 (帧路径/视频路径/TTS路径/时长)</td></tr>
       <tr><td><code>review assets {type}</code></td><td>指定类型的全部资产列表 (scene_refs/grids/frames/videos)</td></tr>
     </tbody>
   </table>

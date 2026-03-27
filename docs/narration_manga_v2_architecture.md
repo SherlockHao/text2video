@@ -59,7 +59,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 +-----------------------------------------------------+
 | Stage 5: video_prompts                               |
 |   PIL 切 4x4 -> 16 帧 (portrait)                     |
-|   LLM -> 15 段视频分镜指令 (旁白版, 无对话字段)        |
+|   LLM -> 16 段视频分镜指令 (旁白版, 无对话字段)        |
 |   输出: frames/u{n}/frame_{nn}.png                   |
 |         grids/video_segments_u{n}.json               |
 +-----------------------------------------------------+
@@ -107,7 +107,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
       "title": "标题",
       "core_conflict": "核心冲突",
       "emotion_tone": "悬疑紧张",
-      "key_scenes": [{"location": "...", "description": "..."}],
+      "key_scenes": [{"location": "...", "description": "...", "environment_prompt": "English T2I prompt for empty environment"}],
       "ending_hook": "钩子",
       "characters": ["角色A", "角色B"],
       "script": [
@@ -122,7 +122,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
       "char_id": "char_001",
       "gender": "男",
       "age": "青年",
-      "appearance_prompt": "外貌文生图提示词"
+      "appearance_prompt": "structured: body type, hair, clothing, props, marks"
     }
   ]
 }
@@ -182,7 +182,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 +-- grids/
 |   +-- grid_u1_shots.json       # LLM 16 shot prompts
 |   +-- grid_u1_v1.png           # Gemini 4K 宫格图 (9:16 portrait)
-|   +-- video_segments_u1.json   # LLM 15 段视频指令 (旁白版)
+|   +-- video_segments_u1.json   # LLM 16 段视频指令 (旁白版)
 +-- frames/
 |   +-- u1/
 |       +-- frame_01.png         # 切出的 16 帧
@@ -219,7 +219,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 | `op_review_storyboard` | 所有 units 摘要 (title/conflict/emotion/characters/narration_count) + character_profiles |
 | `op_review_status` | 10 个 stage 的完成状态 + 资产统计 |
 | `op_review_characters` | 角色三视图路径（无音色信息） |
-| `op_review_unit(n)` | 指定 unit 的 15 段分镜详情 (帧/视频/TTS路径) |
+| `op_review_unit(n)` | 指定 unit 的 16 段分镜详情 (帧/视频/TTS路径) |
 | `op_review_tts` | 按 unit/segment 结构返回旁白 TTS 信息 |
 | `op_review_assets(type)` | 指定类型的全部资产列表 |
 
@@ -261,7 +261,7 @@ Layer 3: BGM (instrumental)               -> mean=-28dB (动态校准) + fade ou
 anullsrc -> [tts1 adelay=offset1] -> [tts2 adelay=offset2] -> ... -> amix
 ```
 
-每段 TTS 按对应视频段的起始时间偏移（adelay），生成一条完整的旁白时间轴音轨。
+每段 TTS 按对应视频段的起始时间偏移（adelay），生成一条完整的旁白时间轴音轨。使用 `seg_to_unified` 映射表将 segment 编号对齐到 unified clip 序号，确保音频时间轴与实际视频拼接顺序一致。
 
 ### BGM 预处理
 

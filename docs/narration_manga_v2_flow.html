@@ -474,9 +474,9 @@
       </ul>
     </div>
     <div class="detail-box">
-      <strong>Step B: LLM 生成 15 段指令（旁白版）</strong>
+      <strong>Step B: LLM 生成 16 段指令（旁白版）</strong>
       <ul>
-        <li>相邻两帧组成一段 (帧N &rarr; 帧N+1)</li>
+        <li>每帧对应一段 (16 帧 &rarr; 16 段)</li>
         <li><strong>无 is_dialogue / dialogue / facing 字段</strong></li>
         <li>有 narration_text / is_memory / emotion</li>
         <li>video_prompt 禁止说话/口型描写</li>
@@ -850,7 +850,7 @@
       <tr><td><code>review storyboard</code></td><td>所有 units 摘要 (title/conflict/emotion/characters/narration_count/action_count) + character_profiles</td></tr>
       <tr><td><code>review status</code></td><td>10 个 stage 完成状态 + 各类资产数量统计，支持 partial 状态检测</td></tr>
       <tr><td><code>review characters</code></td><td>角色三视图路径（无音色信息 &mdash; 与 dialogue_manga 不同）</td></tr>
-      <tr><td><code>review unit {n}</code></td><td>指定 unit 的 15 段分镜详情 (帧路径/视频路径/TTS路径/时长/情感/旁白文字)</td></tr>
+      <tr><td><code>review unit {n}</code></td><td>指定 unit 的 16 段分镜详情 (帧路径/视频路径/TTS路径/时长/情感/旁白文字)</td></tr>
       <tr><td><code>review tts</code></td><td>按 unit/segment 结构返回旁白 TTS 信息 (narration_text/emotion/duration)</td></tr>
       <tr><td><code>review assets {type}</code></td><td>指定类型的全部资产列表 (scene_refs/grids/frames/videos)</td></tr>
     </tbody>

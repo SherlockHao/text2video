@@ -57,7 +57,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 ├─────────────────────────────────────────────────────┤
 │ Stage 6: video_prompts                              │
 │   PIL 切 4×4 → 16 帧 (1376×768)                     │
-│   LLM → 15 段视频分镜指令                             │
+│   LLM → 16 段视频分镜指令                             │
 │   输出: frames/u{n}/frame_{nn}.png                  │
 │         grids/video_segments_u{n}.json              │
 ├─────────────────────────────────────────────────────┤
@@ -84,6 +84,8 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 │ Stage 10: assembly                                  │
 │   统一 1280×720 @30fps                              │
 │   ElevenLabs BGM (instrumental only, -28dB)         │
+│   三层混合: video(-20dB) + BGM(-28dB)                │
+│     + dialogue_patch(-15dB, 非lip-sync段)            │
 │   BGM 预处理: compand + dynaudnorm (3s, 25dB)       │
 │   无淡入 + 淡出1s · dB精确对标 · 防 clipping          │
 │   输出: videos/u{n}_output.mp4                      │
@@ -102,7 +104,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
       "title": "标题",
       "core_conflict": "核心冲突",
       "emotion_tone": "悬疑紧张",
-      "key_scenes": [{"location": "...", "description": "..."}],
+      "key_scenes": [{"location": "...", "description": "...", "environment_prompt": "English T2I prompt for empty environment"}],
       "ending_hook": "钩子",
       "characters": ["角色A", "角色B"],
       "script": [
@@ -117,7 +119,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
       "char_id": "char_001",
       "gender": "男",
       "age": "青年",
-      "appearance_prompt": "外貌文生图提示词",
+      "appearance_prompt": "structured: body type, hair, clothing, props, marks",
       "voice_trait": "低沉沙哑"
     }
   ]
@@ -168,7 +170,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 ├── grids/
 │   ├── grid_u1_shots.json       # LLM 16 shot prompts
 │   ├── grid_u1_v1.png           # Gemini 4K 宫格图
-│   └── video_segments_u1.json   # LLM 15 段视频指令
+│   └── video_segments_u1.json   # LLM 16 段视频指令
 ├── frames/
 │   └── u1/
 │       ├── frame_01.png         # 切出的 16 帧
@@ -200,7 +202,7 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 | `op_review_storyboard` | 所有 units 摘要 + character_profiles |
 | `op_review_status` | 10 个 stage 的完成状态 + 资产统计 |
 | `op_review_characters` | 角色三视图路径 + 音色信息 |
-| `op_review_unit(n)` | 指定 unit 的 15 段分镜详情 (帧/视频/TTS路径) |
+| `op_review_unit(n)` | 指定 unit 的 16 段分镜详情 (帧/视频/TTS路径) |
 | `op_review_assets(type)` | 指定类型的全部资产列表 |
 
 ## 8. 关键决策
