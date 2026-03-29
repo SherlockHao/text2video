@@ -1695,13 +1695,13 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     filter_parts.append(
                         "[vid][bgm][dlg]amix=inputs=3:"
                         "duration=first:dropout_transition=2:"
-                        "weights=1 1 1[aout]")
+                        "normalize=0:weights=1 1 1[aout]")
                     ctx.log(f"    混合: 3层 (视频-20dB + BGM + 补充对话-15dB)")
                 else:
                     filter_parts.append(
                         "[vid][bgm]amix=inputs=2:"
                         "duration=first:dropout_transition=2:"
-                        "weights=1 1[aout]")
+                        "normalize=0:weights=1 1[aout]")
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -1726,7 +1726,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                             "-filter_complex",
                             f"[0:a]volume=-20dB[vid];"
                             f"[1:a]volume={patch_adjust:.1f}dB[dlg];"
-                            f"[vid][dlg]amix=inputs=2:duration=first:weights=1 1[aout]",
+                            f"[vid][dlg]amix=inputs=2:duration=first:normalize=0:weights=1 1[aout]",
                             "-map", "0:v", "-map", "[aout]",
                             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                             final_output,
@@ -1735,7 +1735,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                         if fb_result.returncode == 0:
                             ctx.log("    ✓ 二层混合成功（视频+补充对话，无BGM）")
                         else:
-                            shutil.move(concat_out, final_output)
+                            shutil.copy2(concat_out, final_output)
                             ctx.log("    ✗ 二层混合也失败，用原始视频")
                     else:
                         shutil.move(concat_out, final_output)

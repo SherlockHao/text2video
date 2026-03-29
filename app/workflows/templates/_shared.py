@@ -220,7 +220,7 @@ def _preprocess_bgm(bgm_raw_path: str, target_duration: float,
     if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 100:
         before_mean, _ = _measure_mean_volume(bgm_raw_path, duration=5)
         after_mean, _ = _measure_mean_volume(output_path, duration=5)
-        print(f"    BGM 预处理: compand + dynaudnorm (3s窗口, maxgain=15dB)")
+        print(f"    BGM 预处理: compand + dynaudnorm (3s窗口, maxgain=25dB)")
         print(f"    BGM 预处理: 前5s mean {before_mean:.1f}dB → {after_mean:.1f}dB")
         return output_path
 

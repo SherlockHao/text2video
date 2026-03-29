@@ -1863,7 +1863,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 filter_parts.append(
                     f"{mix_str}amix=inputs={n_inputs}:"
                     f"duration=first:dropout_transition=2:"
-                    f"weights={weights}[aout]")
+                    f"normalize=0:weights={weights}[aout]")
 
                 filter_complex = ";".join(filter_parts)
 
@@ -1894,7 +1894,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                             f"[0:a]volume=-35dB[vid_audio];"
                             f"[1:a]volume={narr_adjust_db:.1f}dB[narr];"
                             f"[vid_audio][narr]amix=inputs=2:"
-                            f"duration=first:weights=1 1[aout]",
+                            f"duration=first:normalize=0:weights=1 1[aout]",
                             "-map", "0:v", "-map", "[aout]",
                             "-c:v", "copy", "-c:a", "aac",
                             "-b:a", "192k", final_output,
