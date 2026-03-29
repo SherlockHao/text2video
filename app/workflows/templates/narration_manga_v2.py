@@ -189,6 +189,7 @@ GRID_SHOTS_SYSTEM_PROMPT = """你是一个创意视觉化脚本助手（精简�
 5. 每个 prompt_text 末尾必须包含 "no timecode, no subtitles"
 6. 风格统一为动漫/漫画风格
 7. 每个面板都是 9:16 竖屏构图
+8. 每个 shot 必须标注 scene_group（场景分组标签），格式为 key_scenes 中的 location 名。同一物理空间的分镜使用相同 scene_group。如果是回忆/闪回场景，在 scene_group 后加 "[FLASHBACK]"。
 
 【节奏规则】
 - 普通剧情：MS/MCU 为主
@@ -204,7 +205,8 @@ GRID_SHOTS_SYSTEM_PROMPT = """你是一个创意视觉化脚本助手（精简�
 {{
   "style_tags": ["tag1", "tag2", "tag3"],
   "shots": [
-    {{"shot_number": 1, "prompt_text": "英文关键词prompt..."}},
+    {{"shot_number": 1, "prompt_text": "英文关键词prompt...", "scene_group": "陈记铁匠铺"}},
+    {{"shot_number": 15, "prompt_text": "英文关键词prompt...", "scene_group": "铁匠铺内 [FLASHBACK]"}},
     ...共16个
   ]
 }}"""
@@ -229,6 +231,9 @@ GRID_IMAGE_PROMPT_TEMPLATE = """You are generating a single 4x4 grid artwork (4 
 
 【REFERENCE IMAGES】
 {char_ref_labels}
+
+【STORY CONTEXT】
+{story_context}
 
 【PANELS — draw each panel exactly as described】
 {shots_text}
@@ -668,8 +673,32 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                  for i, s in enumerate(shots)]
             )
 
+            # Build story context for Gemini
+            story_context_parts = []
+            story_context_parts.append(f"Title: {title}")
+            story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
+            story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
+
+            # Scene grouping from shots
+            scene_groups = {}
+            for s in shots:
+                sg = s.get("scene_group", "")
+                sn = s.get("shot_number", 0)
+                if sg:
+                    scene_groups.setdefault(sg, []).append(sn)
+
+            if scene_groups:
+                story_context_parts.append("Scene grouping (panels sharing the same location should have consistent background):")
+                for sg, panels in scene_groups.items():
+                    panel_str = ", ".join(str(p) for p in panels)
+                    flashback = " — USE DESATURATED/BLUE TONES" if "[FLASHBACK]" in sg else ""
+                    story_context_parts.append(f"  - Panels {panel_str}: {sg}{flashback}")
+
+            story_context = "\n".join(story_context_parts)
+
             gemini_prompt = GRID_IMAGE_PROMPT_TEMPLATE.format(
                 char_ref_labels=char_ref_labels,
+                story_context=story_context,
                 shots_text=shots_text,
                 style_tags=style_tags,
             )
@@ -2579,8 +2608,33 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
              for i, s in enumerate(shots)]
         )
 
+        # Build story context for Gemini
+        title = unit.get("title", "")
+        story_context_parts = []
+        story_context_parts.append(f"Title: {title}")
+        story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
+        story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
+
+        # Scene grouping from shots
+        scene_groups = {}
+        for s in shots:
+            sg = s.get("scene_group", "")
+            sn = s.get("shot_number", 0)
+            if sg:
+                scene_groups.setdefault(sg, []).append(sn)
+
+        if scene_groups:
+            story_context_parts.append("Scene grouping (panels sharing the same location should have consistent background):")
+            for sg, panels in scene_groups.items():
+                panel_str = ", ".join(str(p) for p in panels)
+                flashback = " — USE DESATURATED/BLUE TONES" if "[FLASHBACK]" in sg else ""
+                story_context_parts.append(f"  - Panels {panel_str}: {sg}{flashback}")
+
+        story_context = "\n".join(story_context_parts)
+
         gemini_prompt = GRID_IMAGE_PROMPT_TEMPLATE.format(
             char_ref_labels=char_ref_labels,
+            story_context=story_context,
             shots_text=shots_text,
             style_tags=style_tags,
         )
