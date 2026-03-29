@@ -38,7 +38,7 @@ from app.ai.novel_splitter import split_novel_to_episodes
 
 
 def cmd_run(args):
-    with open(args.input) as f:
+    with open(args.input, encoding="utf-8") as f:
         input_text = f.read()
     wf = get_workflow(args.workflow)
     params = {"duration": args.duration, "voice": args.voice}
@@ -165,7 +165,7 @@ def cmd_split(args):
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    with open(args.input) as f:
+    with open(args.input, encoding="utf-8") as f:
         full_text = f.read()
     episodes = split_novel_to_episodes(
         full_text,

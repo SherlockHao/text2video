@@ -116,9 +116,9 @@ def _get_wf(workflow: str):
 
 
 def _safe_output_dir(output_dir: str) -> str:
-    """校验 output_dir 防止路径遍历，返回安全的绝对路径。"""
-    resolved = os.path.abspath(output_dir)
-    if not resolved.startswith(ALLOWED_OUTPUT_BASE):
+    """校验 output_dir 防止路径遍历（含 symlink），返回安全的绝对路径。"""
+    resolved = os.path.realpath(output_dir)
+    if resolved != ALLOWED_OUTPUT_BASE and not resolved.startswith(ALLOWED_OUTPUT_BASE + os.sep):
         raise HTTPException(status_code=400, detail=f"output_dir must be under {ALLOWED_OUTPUT_BASE}")
     return resolved
 

@@ -1074,12 +1074,12 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     # 回忆场景：加混响
                     if is_memory:
                         mem_path = f"{ctx.output_dir}/audio/u{un}_seg{sn:02d}_dialogue_memory.wav"
-                        subprocess.run([
+                        mem_result = subprocess.run([
                             "ffmpeg", "-y", "-i", audio_path,
                             "-af", "aecho=0.8:0.7:40|60:0.3|0.2,highpass=f=80,lowpass=f=6000",
                             mem_path,
                         ], capture_output=True, timeout=15)
-                        if os.path.exists(mem_path):
+                        if mem_result.returncode == 0 and os.path.exists(mem_path) and os.path.getsize(mem_path) > 100:
                             audio_path = mem_path
 
                     tts_dur = get_media_duration(audio_path)
