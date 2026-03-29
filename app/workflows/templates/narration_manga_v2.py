@@ -202,6 +202,7 @@ Output strictly in JSON format:
       "color_association": "color linked to this character (e.g., cool grey, warm amber)"
     }}
   ],
+  "story_summary_en": "one-sentence English summary of the story conflict and emotional tone (e.g., A fallen heiress is forced to work for the vengeful ex-lover who now controls her fate, creating suffocating tension and power imbalance.)",
   "transition_style": "how scenes transition (e.g., hard cuts for tension, dissolve for memories)",
   "lighting_base": "default lighting setup description"
 }}"""
@@ -276,7 +277,7 @@ GRID_SHOTS_SYSTEM_PROMPT = """你是一个创意视觉化脚本助手（精简�
 5. 每个 prompt_text 末尾必须包含 "no timecode, no subtitles"
 6. 风格统一为动漫/漫画风格
 7. 每个面板都是 9:16 竖屏构图
-8. 每个 shot 必须标注 scene_group（场景分组标签），格式为 key_scenes 中的 location 名。同一物理空间的分镜使用相同 scene_group。如果是回忆/闪回场景，在 scene_group 后加 "[FLASHBACK]"。
+8. 每个 shot 必须标注 scene_group（场景分组标签），用英文标注场景位置（如 "Blacksmith Forge", "CEO Office"）。同一物理空间的分镜使用相同 scene_group。如果是回忆/闪回场景，在 scene_group 后加 "[FLASHBACK]"。
 
 【节奏规则】
 - 普通剧情：MS/MCU 为主
@@ -292,8 +293,8 @@ GRID_SHOTS_SYSTEM_PROMPT = """你是一个创意视觉化脚本助手（精简�
 {{
   "style_tags": ["tag1", "tag2", "tag3"],
   "shots": [
-    {{"shot_number": 1, "prompt_text": "英文关键词prompt...", "scene_group": "陈记铁匠铺"}},
-    {{"shot_number": 15, "prompt_text": "英文关键词prompt...", "scene_group": "铁匠铺内 [FLASHBACK]"}},
+    {{"shot_number": 1, "prompt_text": "英文关键词prompt...", "scene_group": "Blacksmith Forge"}},
+    {{"shot_number": 15, "prompt_text": "英文关键词prompt...", "scene_group": "Forge Interior [FLASHBACK]"}},
     ...共16个
   ]
 }}"""
@@ -586,7 +587,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     emotion_tones=", ".join(emotion_tones),
                     storyboard_json=json.dumps(condensed, ensure_ascii=False, indent=2),
                 ),
-                required_keys=["color_palette", "art_direction", "character_cinematography"],
+                required_keys=["color_palette", "art_direction", "character_cinematography", "story_summary_en"],
                 temperature=0.4,
                 max_tokens=4096,
             )
@@ -684,14 +685,9 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             )
 
             # After building base prompt, add director color hint if available
-            dp = ctx.storyboard.get("director_plan", {})
-            vb = dp.get("visual_bible", {})
-            char_cinema = next(
-                (cc for cc in vb.get("character_cinematography", []) if cc.get("char_id") == cid), None)
-            if char_cinema:
-                color_hint = char_cinema.get("color_association", "")
-                if color_hint:
-                    prompt += f", {color_hint} 色调倾向"
+            # 注：color_association 是英文（来自 Visual Bible），Jimeng 为中文模型
+            # 不追加英文到中文 prompt，避免中英混杂影响 T2I 质量
+            # 角色色调一致性由 scene_refs 和 storyboard_grids 的 Visual Bible 保障
 
             version = ctx.candidates.next_version(asset_key)
             paths = generate_image(
@@ -926,15 +922,20 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                  for i, s in enumerate(shots)]
             )
 
-            # Build story context for Gemini
-            story_context_parts = []
-            story_context_parts.append(f"Title: {title}")
-            story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
-            story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
-
-            # Add visual bible info from director plan
+            # Build story context for Gemini (全英文，避免中英混杂)
             dp_ctx = ctx.storyboard.get("director_plan", {})
             vb_ctx = dp_ctx.get("visual_bible", {})
+
+            story_context_parts = []
+            # 优先用 Visual Bible 的英文 story_summary_en
+            story_en = vb_ctx.get("story_summary_en", "")
+            if story_en:
+                story_context_parts.append(f"Story: {story_en}")
+            else:
+                # 回退：中文原文
+                story_context_parts.append(f"Story: {unit.get('core_conflict', title)}")
+
+            # Add visual bible info
             art_dir_ctx = vb_ctx.get("art_direction", "")
             if art_dir_ctx:
                 story_context_parts.append(f"Art direction: {art_dir_ctx}")
@@ -2902,25 +2903,31 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
              for i, s in enumerate(shots)]
         )
 
-        # Build story context for Gemini
+        # Build story context for Gemini (全英文)
         title = unit.get("title", "")
         story_context_parts = []
-        story_context_parts.append(f"Title: {title}")
-        story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
-        story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
 
-        # Director plan: art_direction + color_palette
+        # Director plan: story_summary_en + art_direction + color_palette
         dp_path = os.path.join(output_dir, "director_plan.json")
+        vb = {}
         if os.path.exists(dp_path):
             with open(dp_path) as f:
                 dp = json.load(f)
             vb = dp.get("visual_bible", {})
-            art_dir = vb.get("art_direction", "")
-            color_primary = vb.get("color_palette", {}).get("primary", "")
-            if art_dir:
-                story_context_parts.append(f"Art direction: {art_dir}")
-            if color_primary:
-                story_context_parts.append(f"Color palette: {color_primary}")
+
+        # 优先用 Visual Bible 的英文摘要
+        story_en = vb.get("story_summary_en", "")
+        if story_en:
+            story_context_parts.append(f"Story: {story_en}")
+        else:
+            story_context_parts.append(f"Story: {unit.get('core_conflict', title)}")
+
+        art_dir = vb.get("art_direction", "")
+        color_primary = vb.get("color_palette", {}).get("primary", "")
+        if art_dir:
+            story_context_parts.append(f"Art direction: {art_dir}")
+        if color_primary:
+            story_context_parts.append(f"Color palette: {color_primary}")
 
         # Scene grouping from shots
         scene_groups = {}
