@@ -1388,9 +1388,10 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                         })
 
                 # 构建 image2video 参数
-                duration = str(max(
+                KLING_MAX_DURATION = 15
+                duration = str(min(KLING_MAX_DURATION, max(
                     seg.get("final_duration",
-                            seg.get("estimated_duration", 3)), 3))
+                            seg.get("estimated_duration", 3)), 3)))
                 video_prompt = seg.get("video_prompt", "")
 
                 i2v_params = {
@@ -1857,9 +1858,11 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
                 n_inputs = len(mix_labels)
                 mix_str = "".join(mix_labels)
+                weights = " ".join(["1"] * n_inputs)
                 filter_parts.append(
                     f"{mix_str}amix=inputs={n_inputs}:"
-                    f"duration=first:dropout_transition=2[aout]")
+                    f"duration=first:dropout_transition=2:"
+                    f"weights={weights}[aout]")
 
                 filter_complex = ";".join(filter_parts)
 
@@ -1880,12 +1883,31 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     ctx.log(f"    ✓ 最终输出: u{un}_output.mp4 "
                             f"({dur:.1f}s, {size}KB)")
                 else:
-                    ctx.log("    ✗ 三层音频混合失败，尝试无 BGM 版本")
-                    stderr = result.stderr.decode(
-                        errors="replace")[:500]
-                    ctx.log(f"    stderr: {stderr}")
-                    # fallback: 只混旁白 + 视频音频
-                    shutil.copy2(concat_out, final_output)
+                    ctx.log("    ✗ 多层混合失败，尝试旁白+视频二层混合")
+                    # fallback: 只混旁白 + 视频音频（跳过 BGM）
+                    if has_narration:
+                        fallback_cmd = [
+                            "ffmpeg", "-y",
+                            "-i", concat_out, "-i", narration_track,
+                            "-filter_complex",
+                            f"[0:a]volume=-35dB[vid_audio];"
+                            f"[1:a]volume={narr_adjust_db:.1f}dB[narr];"
+                            f"[vid_audio][narr]amix=inputs=2:"
+                            f"duration=first:weights=1 1[aout]",
+                            "-map", "0:v", "-map", "[aout]",
+                            "-c:v", "copy", "-c:a", "aac",
+                            "-b:a", "192k", final_output,
+                        ]
+                        fb_result = subprocess.run(
+                            fallback_cmd, capture_output=True, timeout=120)
+                        if fb_result.returncode == 0:
+                            ctx.log("    ✓ 二层混合成功（旁白+视频，无BGM）")
+                        else:
+                            shutil.copy2(concat_out, final_output)
+                            ctx.log("    ✗ 二层混合也失败，用原始视频")
+                    else:
+                        shutil.copy2(concat_out, final_output)
+                        ctx.log("    ✗ 无旁白可混合，用原始视频")
             else:
                 shutil.copy2(concat_out, final_output)
                 ctx.log("    无旁白/BGM，直接输出")
@@ -2058,9 +2080,11 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
         n = len(mix_inputs)
         mix_str = "".join(mix_inputs)
+        weights = " ".join(["1"] * n)
         filter_parts.append(
             f"{mix_str}amix=inputs={n}:"
-            f"duration=first:normalize=0[out]")
+            f"duration=first:normalize=0:"
+            f"weights={weights}[out]")
 
         filter_complex = ";".join(filter_parts)
         cmd += ["-filter_complex", filter_complex,
@@ -2677,9 +2701,10 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     "image": client.encode_image(char_images[cid])})
 
         # 构建参数 (9:16, sound=on)
-        duration = str(max(
+        KLING_MAX_DURATION = 15
+        duration = str(min(KLING_MAX_DURATION, max(
             seg.get("final_duration",
-                     seg.get("estimated_duration", 3)), 3))
+                     seg.get("estimated_duration", 3)), 3)))
         i2v_params = {
             "model_name": "kling-v3",
             "image": client.encode_image(frame_start_path),

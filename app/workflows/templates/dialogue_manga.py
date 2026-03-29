@@ -1169,7 +1169,9 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
                 # 构建 image2video 参数
                 is_dialogue = seg.get("is_dialogue", False)
-                duration = str(max(seg.get("final_duration", 3), 3))
+                KLING_MAX_DURATION = 15
+                duration = str(min(KLING_MAX_DURATION,
+                                   max(seg.get("final_duration", 3), 3)))
 
                 # sound 策略: 对话段 off; 非对话段若 prompt 含说话描写也 off
                 video_prompt = seg.get("video_prompt", "")
@@ -1574,8 +1576,10 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
 
                 n = len(mix_labels)
                 mix_str = "".join(mix_labels)
+                weights = " ".join(["1"] * n)
                 filter_parts.append(
-                    f"{mix_str}amix=inputs={n}:duration=first:normalize=0[out]")
+                    f"{mix_str}amix=inputs={n}:duration=first:"
+                    f"normalize=0:weights={weights}[out]")
 
                 cmd += ["-filter_complex", ";".join(filter_parts),
                         "-map", "[out]",
@@ -1682,12 +1686,14 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                     filter_parts.append(f"[2:a]volume={patch_adjust:.1f}dB[dlg]")
                     filter_parts.append(
                         "[vid][bgm][dlg]amix=inputs=3:"
-                        "duration=first:dropout_transition=2[aout]")
+                        "duration=first:dropout_transition=2:"
+                        "weights=1 1 1[aout]")
                     ctx.log(f"    混合: 3层 (视频-20dB + BGM + 补充对话-15dB)")
                 else:
                     filter_parts.append(
                         "[vid][bgm]amix=inputs=2:"
-                        "duration=first:dropout_transition=2[aout]")
+                        "duration=first:dropout_transition=2:"
+                        "weights=1 1[aout]")
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -2387,7 +2393,9 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 char_refs.append({"image": client.encode_image(char_images[cid])})
 
         # 构建 image2video 参数
-        duration = str(max(seg.get("final_duration", seg.get("estimated_duration", 3)), 3))
+        KLING_MAX_DURATION = 15
+        duration = str(min(KLING_MAX_DURATION,
+                           max(seg.get("final_duration", seg.get("estimated_duration", 3)), 3)))
         i2v_params = {
             "model_name": "kling-v3",
             "image": client.encode_image(frame_start_path),  # 始终用首帧
