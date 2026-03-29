@@ -104,7 +104,8 @@ async def run_workflow(req: WorkflowRunRequest):
 # Review endpoints
 # ================================================================
 
-ALLOWED_OUTPUT_BASE = os.path.abspath("e2e_output")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ALLOWED_OUTPUT_BASE = os.path.join(_PROJECT_ROOT, "e2e_output")
 
 
 def _get_wf(workflow: str):

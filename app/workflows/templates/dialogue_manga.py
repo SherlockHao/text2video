@@ -1477,7 +1477,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                 # 检查是否有音频轨
                 probe = subprocess.run(
                     ["ffprobe", "-v", "quiet", "-show_streams", c],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, timeout=10)
                 has_audio = "codec_type=audio" in probe.stdout
 
                 vf = "fps=30,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
@@ -1741,7 +1741,7 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
                         shutil.move(concat_out, final_output)
                         ctx.log("    ✗ 混合失败，用原始视频")
             else:
-                os.rename(concat_out, final_output)
+                shutil.copy2(concat_out, final_output)
                 ctx.log(f"    无 BGM，直接输出")
 
         return StageResult(success=True)
@@ -2434,6 +2434,14 @@ class DialogueMangaWorkflow(InteractiveOpsMixin, BaseWorkflow):
         }
         if char_refs:
             i2v_params["subject_reference"] = char_refs[:1]
+
+        # sound 策略 (same as stage_video_gen)
+        is_dialogue = seg.get("is_dialogue", False)
+        video_prompt = seg.get("video_prompt", "")
+        _speech_keywords = ("说话", "开口", "口型", "讲述", "台词", "对话",
+                            "喊", "叫", "呼喊", "低语", "嘀咕", "嘶吼")
+        has_speech_hint = any(kw in video_prompt for kw in _speech_keywords)
+        i2v_params["sound"] = "off" if (is_dialogue or has_speech_hint) else "on"
 
         # 提交 image2video
         task_id = None

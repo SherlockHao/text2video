@@ -1164,7 +1164,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
 
         # ── Step 1: LLM 选择旁白音色 + 生成 instruct 指令 ──
         voice_config_path = os.path.join(ctx.output_dir, "narration_voice.json")
-        if os.path.exists(voice_config_path):
+        if os.path.exists(voice_config_path) and os.path.getsize(voice_config_path) > 10:
             with open(voice_config_path) as f:
                 voice_config = json.load(f)
             ctx.log(f"  ★ 断点恢复: 旁白音色 {voice_config['voice_id']}")
@@ -2197,7 +2197,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         audio_dir = os.path.join(output_dir, "audio")
         tts_files = (
             [f for f in os.listdir(audio_dir)
-             if f.endswith("_narration.mp3") or f.endswith("_narration.wav")]
+             if f.endswith("_narration.wav")]
             if os.path.isdir(audio_dir) else [])
         stages_status["narration_tts"] = (
             "completed" if tts_files else "pending")

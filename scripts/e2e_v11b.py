@@ -93,7 +93,8 @@ def cmd_edit(args):
 def cmd_reroll(args):
     wf = get_workflow(args.workflow)
     if args.target == "char_ref":
-        result = wf.op_reroll_char_ref(args.output, args.char)
+        result = wf.op_reroll_char_ref(args.output, args.char,
+                                        extra_prompt=getattr(args, "extra_prompt", "") or "")
     elif args.target == "scene_bg":
         result = wf.op_reroll_scene_bg(args.output, args.scene)
     elif args.target == "tts":
@@ -209,7 +210,7 @@ subparsers = parser.add_subparsers(dest="command")
 
 # 共享参数（加到每个子命令）
 def _add_common(p):
-    p.add_argument("--workflow", type=str, default="narration_manga")
+    p.add_argument("--workflow", type=str, default="narration_manga_v2")
     p.add_argument("--output", type=str, default="e2e_output/v11b")
     p.add_argument("--json", action="store_true", help="JSON output for agent")
 
@@ -253,6 +254,7 @@ p_reroll.add_argument("--seg", type=int, help="Segment number")
 p_reroll.add_argument("--sub", type=int, help="Sub-shot number (1-based)")
 p_reroll.add_argument("--unit", type=int, help="Unit number (for dialogue_manga)")
 p_reroll.add_argument("--frame", type=int, help="Frame number (1-16, for frame reroll)")
+p_reroll.add_argument("--extra-prompt", type=str, default="", help="Extra prompt clauses appended to char_ref reroll")
 p_reroll.add_argument("--voice", type=str, help="TTS voice override")
 p_reroll.add_argument("--emotion", type=str, help="TTS emotion override")
 
