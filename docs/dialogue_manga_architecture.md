@@ -86,8 +86,10 @@ LLM:        Qwen 3.5-plus (分镜/配音匹配/视频指令)
 │   ElevenLabs BGM (instrumental only, -28dB)         │
 │   三层混合: video(-20dB) + BGM(-28dB)                │
 │     + dialogue_patch(-15dB, 非lip-sync段)            │
+│   amix: normalize=0, weights=1 1..., duration=first │
 │   BGM 预处理: compand + dynaudnorm (3s, 25dB)       │
 │   无淡入 + 淡出1s · dB精确对标 · 防 clipping          │
+│   Fallback: 3-layer → 2-layer → raw video           │
 │   输出: videos/u{n}_output.mp4                      │
 └─────────────────────────────────────────────────────┘
 ```
@@ -230,12 +232,29 @@ final_duration = max(estimated_duration, math.ceil(tts_duration), 3)
 
 无额外 buffer，精确对齐。
 
+### Kling V3 Duration Cap
+
+> 最大时长 15 秒 (`KLING_MAX_DURATION=15`)。超过 15s 的段会被截断到 15s。
+
 ### 帧率统一
 
 所有 clip 在拼接前统一为 `1280×720 @30fps`：
 - Kling image2video 输出 24fps
 - Kling lip-sync 输出 30fps
 - 混合拼接会导致冻帧，必须预处理
+
+### Assembly Fallback Chain
+
+> 3-layer mix (video + dialogue_patch + BGM) → 2-layer mix (video + dialogue_patch) → raw video。任一层混合失败时自动降级，确保最终总有输出。
+
+### Language Separation
+
+> 各 AI 服务使用明确的语言分工：
+> - **Gemini prompts**: 全英文（story_context 英文，scene_group labels 英文，emotion 翻译为英文）
+> - **Jimeng prompts**: 全中文
+> - **Kling prompts**: 中文
+> - **TTS**: 中文
+> - dialogue_manga 使用 emotion translation map 将中文情感词翻译为英文供 Gemini 使用
 
 ## 9. API 端点
 

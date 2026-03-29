@@ -34,7 +34,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 后处理:      FFmpeg (字幕/三层混音/帧率统一/拼接) + PIL (宫格裁切)
 ```
 
-## 3. 10-Stage Pipeline
+## 3. 11-Stage Pipeline
 
 ```
 +-----------------------------------------------------+
@@ -43,6 +43,12 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 |   输入: 小说文本 (<=15000字)                           |
 |   script 类型: narration (旁白) + action (动作)       |
 |   输出: storyboard.json                              |
++-----------------------------------------------------+
+| Stage 1.5: director_plan                             |
+|   LLM call 1 -> Visual Bible (English, global)       |
+|   LLM call 2 -> Unit Director Plan (Chinese, per-unit)|
+|   ~33s (2 LLM calls)                                 |
+|   输出: director_plan.json                            |
 +-----------------------------------------------------+
 | Stage 2: char_refs                                   |
 |   Jimeng T2I -> 白底三视图 (1472x832)                 |
@@ -85,6 +91,8 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 |   统一 720x1280 @30fps                               |
 |   旁白时间轴音轨 (adelay 逐段对齐)                     |
 |   三层音频混合 + ElevenLabs BGM                       |
+|   amix: normalize=0, weights=1 1..., duration=first  |
+|   Fallback: 3-layer → 2-layer → raw video            |
 |   输出: videos/u{n}_output.mp4                       |
 +-----------------------------------------------------+
 | Stage 10: quality_gate                               |
@@ -173,6 +181,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 ```
 {output_dir}/
 +-- storyboard.json              # Stage 1 输出
++-- director_plan.json           # Stage 1.5 输出 (Visual Bible + Unit Director Plans)
 +-- narration_voice.json         # Stage 6 LLM 选择旁白音色
 +-- candidates.json              # CandidateManager 持久化
 +-- characters/
@@ -217,7 +226,7 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 | 方法 | 返回内容 |
 |------|---------|
 | `op_review_storyboard` | 所有 units 摘要 (title/conflict/emotion/characters/narration_count) + character_profiles |
-| `op_review_status` | 10 个 stage 的完成状态 + 资产统计 |
+| `op_review_status` | 11 个 stage 的完成状态 + 资产统计 |
 | `op_review_characters` | 角色三视图路径（无音色信息） |
 | `op_review_unit(n)` | 指定 unit 的 16 段分镜详情 (帧/视频/TTS路径) |
 | `op_review_tts` | 按 unit/segment 结构返回旁白 TTS 信息 |
@@ -228,6 +237,10 @@ LLM:        Qwen 3.5-plus (分镜/旁白音色匹配/视频指令)
 ### Plan C: 首帧 only, 无尾帧, 串行执行
 
 > 全部视频段使用首帧驱动，无尾帧，硬切过渡。与 dialogue_manga 的并行策略不同，narration_manga_v2 采用**串行执行**，每段生成后等待 5s 再继续下一段，避免 Kling API 并行限制。
+
+### Kling V3 Duration Cap
+
+> 最大时长 15 秒 (`KLING_MAX_DURATION=15`)。超过 15s 的段会被截断到 15s。
 
 ### sound=on: Kling V3 音效
 
@@ -252,7 +265,12 @@ Layer 3: BGM (instrumental)               -> mean=-28dB (动态校准) + fade ou
 - 每层独立测量均值 (loudnorm meanvol)
 - 动态计算调整量: `adjust_dB = target_dB - measured_mean`
 - 防 clipping: 确保调整后 max_peak < -1.0dB
-- amix 混合，duration=first，dropout_transition=2
+- amix 混合，normalize=0，weights=1 1...，duration=first，dropout_transition=2
+- normalize=0 防止 amix 自动缩小各层音量
+
+### Assembly Fallback Chain
+
+> 3-layer mix (video + narration + BGM) → 2-layer mix (video + narration) → raw video。任一层混合失败时自动降级，确保最终总有输出。
 
 ### 旁白时间轴构建
 
@@ -297,6 +315,17 @@ final_duration = max(estimated_duration, math.ceil(tts_duration), 3)
 - 9:16 竖屏 (portrait)
 - 无音频的 clip 添加静音轨 (anullsrc)
 - libx264, preset=fast, crf=18
+
+### Language Separation
+
+> 各 AI 服务使用明确的语言分工：
+> - **Gemini prompts**: 全英文（story_context、scene_group labels 均为英文）
+> - **Jimeng prompts**: 全中文
+> - **Kling prompts**: 中文
+> - **TTS**: 中文
+> - **Visual Bible**: 英文（供 T2I 直接使用）
+> - **Unit Director Plan**: 中文（供后续 LLM stage 参考）
+> - narration_v2 使用 Visual Bible 中的 `story_summary_en` 作为英文 story_context
 
 ### Quality Gate 检测项
 

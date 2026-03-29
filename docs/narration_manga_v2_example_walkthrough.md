@@ -122,6 +122,84 @@ python scripts/e2e_v11b.py run \
 
 ---
 
+## Stage 1.5: director_plan (导演规划)
+
+**调用**: Qwen 3.5-plus (2 次 LLM 调用)
+
+**LLM Call 1**: 生成全局 Visual Bible（英文，跨所有 unit 统一的视觉规范）
+
+**LLM Call 2**: 生成单元导演规划（中文，每个 unit 的导演构思）
+
+**输出**: `director_plan.json`
+
+#### Visual Bible（英文，供 T2I 直接使用）
+
+```json
+{
+  "color_palette": {
+    "primary": "cold steel grey with deep charcoal undertones to reflect the corporate oppression and suspense",
+    "accent": "muted crimson red used sparingly for emotional pain or moments of intense threat",
+    "memory_flashback": "sepia-toned with heavy vignette and soft focus to denote lost warmth and past trauma",
+    "climax": "high-contrast chiaroscuro with sharp blue rim lighting against deep black shadows to heighten tension"
+  },
+  "art_direction": "Modern dramatic anime style with cel-shaded textures, heavy use of chiaroscuro lighting, cinematic widescreen framing, sharp angular character designs, and a moody atmosphere emphasizing psychological suspense and power imbalance.",
+  "recurring_motifs": [
+    {
+      "symbol": "Worn high heels",
+      "meaning": "Su Niannian's fallen status and physical exhaustion",
+      "visual_treatment": "Close-up shots focusing on scuffed leather and cracked heels against pristine marble floors"
+    },
+    {
+      "symbol": "Platinum cufflinks",
+      "meaning": "Lu Jingchen's cold wealth and unyielding control",
+      "visual_treatment": "Specular highlights catching cold light, often framed in extreme close-ups during threats"
+    },
+    {
+      "symbol": "Glass partitions",
+      "meaning": "The barrier between the powerful and the vulnerable, transparency without access",
+      "visual_treatment": "Rendered with slight distortion and reflections that trap characters visually within the frame"
+    }
+  ],
+  "character_cinematography": [
+    {
+      "char_id": "char_001",
+      "name": "Su Niannian",
+      "signature_framing": "High-angle shots to emphasize vulnerability and smallness",
+      "color_association": "pale beige and desaturated black"
+    },
+    {
+      "char_id": "char_002",
+      "name": "Lu Jingchen",
+      "signature_framing": "Low-angle shots to dominate the frame, silhouetted against bright windows",
+      "color_association": "deep charcoal grey and icy blue"
+    }
+  ],
+  "transition_style": "Hard cuts with quick zooms for tension spikes, slow dissolves into darkness for emotional weight",
+  "lighting_base": "Cool, directional overhead fluorescent lighting casting harsh downward shadows"
+}
+```
+
+#### Unit Director Plan（中文，供后续 LLM stage 参考）
+
+```json
+{
+  "unit_number": 1,
+  "emotional_curve": "压抑卑微（入场）→震惊凝固（重逢）→恐惧递进（逼近）→短暂喘息（公事公办被拒）→绝望囚禁（接受安排）→寒意彻骨（结尾低语）",
+  "camera_strategy": "开场使用手持跟拍与高角度俯拍强调苏念念的渺小与不安；重逢瞬间切换至静态特写捕捉微表情；陆景琛逼近时采用低角度仰拍配合缓慢推镜头制造压迫感",
+  "key_compositions": [
+    {"panels": "1-2", "technique": "局部特写递进：从磨损的高跟鞋特写切入，上移至泛白指节"},
+    {"panels": "3-4", "technique": "视线匹配剪辑：苏念念推门的主观视角直接切至陆景琛抬头的特写"},
+    {"panels": "5-6", "technique": "权力反差构图：陆景琛起身逼近时镜头置于地面低角度"}
+  ],
+  "color_shifts": "冷钢灰开场→瞬间去色处理→深炭灰与阴影主导→结尾高对比度冷蓝轮廓光",
+  "pacing_notes": "帧1-3节奏缓慢沉重；帧4-5突然静止；帧6-8节奏加速；帧11-12极度放慢"
+}
+```
+
+**耗时**: ~33s (Visual Bible ~15s + Unit Plan ~17s)
+
+---
+
 ## Stage 2: char_refs (角色三视图)
 
 **调用**: Jimeng T2I (1472x832)
@@ -508,6 +586,7 @@ e2e_output/narration_v2_test/videos/u1_output.mp4
 ```
 e2e_output/narration_v2_test/
 ├── storyboard.json                 # Stage 1: LLM 分镜
+├── director_plan.json              # Stage 1.5: Visual Bible + Unit Director Plans
 ├── narration_voice.json            # Stage 6: 旁白音色配置
 ├── candidates.json                 # 资产版本管理
 ├── characters/
@@ -552,15 +631,16 @@ e2e_output/narration_v2_test/
 | Stage | 耗时 | 占比 |
 |-------|------|------|
 | 1. storyboard | 37s | 1.5% |
+| 1.5. director_plan | 33s | 1.3% |
 | 2. char_refs | 72s | 3% |
 | 3. scene_refs | 87s | 3.5% |
 | 4. storyboard_grids | 120s | 5% |
 | 5. video_prompts | 64s | 2.5% |
 | 6. narration_tts | 27s | 1% |
-| **7. video_gen** | **~2100s** | **84%** |
+| **7. video_gen** | **~2100s** | **83%** |
 | 8. subtitle_burn | 4s | <1% |
 | 9. assembly | 14s | <1% |
 | 10. quality_gate | 2s | <1% |
-| **总计** | **~42 min** | |
+| **总计** | **~42.5 min** | |
 
-视频生成（Stage 7）占总耗时 84%，是串行执行 16 段 Kling V3 的瓶颈。
+视频生成（Stage 7）占总耗时 83%，是串行执行 16 段 Kling V3 的瓶颈。Pipeline 共 11 个 stage（含 Stage 1.5 director_plan）。

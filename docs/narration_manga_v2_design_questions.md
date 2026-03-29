@@ -129,7 +129,7 @@ Plan C + 串行，确认以下理解是否正确：
 
 ---
 
-## 10-Stage Pipeline 规划
+## 11-Stage Pipeline 规划
 
 确认以上问题后，最终的 pipeline 如下：
 
@@ -137,6 +137,11 @@ Plan C + 串行，确认以下理解是否正确：
 ┌─ 1. storyboard        — LLM 分镜（旁白叙事 + 角色档案）
 │     输入: 小说文本 (≤15000字)
 │     输出: storyboard.json (units + narration_segments + character_profiles)
+│
+├─ 1.5. director_plan   — 导演规划 (2 次 LLM 调用, ~33s)
+│     Visual Bible（英文，全局视觉规范：色板/美术方向/视觉符号/角色拍摄方式）
+│     Unit Director Plan（中文，per-unit：情感曲线/镜头策略/构图技法/色调变化/节奏）
+│     输出: director_plan.json
 │
 ├─ 2. char_refs          — 角色白底三视图 (Jimeng 1472×832)
 │     与对话漫剧相同

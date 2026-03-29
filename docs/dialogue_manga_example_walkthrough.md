@@ -396,10 +396,16 @@ Layer 1: 视频原音 (lip-sync 对话 + 环境音效) → -20dB
 Layer 2: BGM (纯器乐)                        → -28dB (dB 精确对标)
 Layer 3: 补充对话 (如有)                       → -15dB
                                                ↓
-                                 amix → u1_output.mp4
+                     amix (normalize=0, weights=1 1...) → u1_output.mp4
 ```
 
 BGM 淡出: 最后 1 秒 (无淡入)
+
+**amix 参数**: `normalize=0` 防止自动缩小各层音量，`weights=1 1...` 保持各层权重一致。
+
+**Assembly fallback chain**: 3-layer mix → 2-layer mix → raw video。任一层混合失败时自动降级。
+
+**Kling V3 duration cap**: 最大 15 秒 (`KLING_MAX_DURATION=15`)，超过的段会被截断。
 
 **输出**: `videos/u1_output.mp4`
 
