@@ -2,8 +2,9 @@
 旁白漫剧 V2 工作流模板 — Narration-driven manga drama (V2)
 单旁白音轨 + 9:16 竖屏 + 4×4 Gemini 宫格 + 串行视频生成 + 三层音频混合
 
-10 Stages:
+11 Stages:
   1. storyboard        — LLM 分镜（含旁白剧本 + 角色档案）
+  1.5. director_plan   — 导演规划 (全局 Visual Bible + 单元导演计划)
   2. char_refs         — 角色三视图参考图 (Jimeng T2I)
   3. scene_refs        — 场景参考图 (Gemini + 角色参考)
   4. storyboard_grids  — 4×4 宫格分镜图 (Gemini 4K, 9:16 portrait)
@@ -175,6 +176,92 @@ NARRATION_STORYBOARD_USER_PROMPT = """请阅读以下小说文本，识别有效
 {input_text}"""
 
 
+# ── Director Plan Prompts ────────────────────────────────────────
+
+VISUAL_BIBLE_SYSTEM_PROMPT = """You are a senior anime director creating a Visual Bible for a manga drama production.
+
+Based on the complete storyboard (all units, characters, and scenes), define the global visual rules that ensure consistency across the entire production.
+
+Output strictly in JSON format:
+{{
+  "color_palette": {{
+    "primary": "main color tone description (e.g., cold grey with steel blue undertones)",
+    "accent": "accent color for emotional highlights (e.g., warm orange for fire/passion scenes)",
+    "memory_flashback": "color treatment for memory/flashback scenes (e.g., desaturated cold blue, low contrast)",
+    "climax": "color shift for emotional peaks (e.g., deeper shadows, red accent lighting)"
+  }},
+  "art_direction": "overall art style description in English for T2I models (30-50 words, e.g., cel-shaded anime style, dramatic chiaroscuro lighting, cinematic widescreen composition, high contrast shadows)",
+  "recurring_motifs": [
+    {{"symbol": "object/element", "meaning": "what it represents", "visual_treatment": "how to render it"}}
+  ],
+  "character_cinematography": [
+    {{
+      "char_id": "char_001",
+      "name": "character name",
+      "signature_framing": "how this character is typically framed (e.g., low angle to emphasize vulnerability, always partially in shadow)",
+      "color_association": "color linked to this character (e.g., cool grey, warm amber)"
+    }}
+  ],
+  "transition_style": "how scenes transition (e.g., hard cuts for tension, dissolve for memories)",
+  "lighting_base": "default lighting setup description"
+}}"""
+
+VISUAL_BIBLE_USER_PROMPT = """Based on the complete storyboard below, create a Visual Bible.
+
+【Storyboard Summary】
+Title: {title}
+Units: {num_units}
+Characters: {characters_summary}
+Emotion tones: {emotion_tones}
+
+【Full Storyboard】
+{storyboard_json}
+
+Create the Visual Bible in English (for T2I model consumption)."""
+
+UNIT_DIRECTOR_PLAN_SYSTEM_PROMPT = """你是一位资深动漫导演，正在为漫剧的一个单元制定导演规划。
+
+你已经看到了全局的 Visual Bible（视觉圣经），现在需要针对这个具体单元制定详细的导演规划。
+
+输出严格JSON格式：
+{{
+  "unit_number": 1,
+  "emotional_curve": "情感节奏曲线描述（如：压抑→震惊→恐惧递进→短暂喘息→绝望→悬念）",
+  "camera_strategy": "整体镜头策略（如：前半段多用中远景建立空间，后半段收紧到特写强调情感）",
+  "key_compositions": [
+    {{
+      "panels": "1-3",
+      "technique": "构图技法描述（如：递进推近，从物件特写到人物全身，逐步揭示主角）"
+    }}
+  ],
+  "color_shifts": "色调变化规划（如：冷灰开场→明暗对比加剧→暗调压抑→冷蓝回忆→回到暗调）",
+  "pacing_notes": "节奏备注（如：前4帧节奏慢，建立氛围；5-9帧加速，制造紧张；14-15帧突然放慢，回忆感）",
+  "special_treatments": [
+    {{
+      "panels": "14-15",
+      "treatment": "特殊处理（如：回忆闪回，降低饱和度，加雨滴效果，人物轮廓模糊化）"
+    }}
+  ]
+}}"""
+
+UNIT_DIRECTOR_PLAN_USER_PROMPT = """【Visual Bible（全局视觉圣经）】
+{visual_bible_json}
+
+【当前单元信息】
+单元 {unit_number}: {title}
+情感底色: {emotion_tone}
+核心冲突: {core_conflict}
+结尾钩子: {ending_hook}
+
+【剧本】
+{script_json}
+
+【角色】
+{characters_json}
+
+请为这个单元制定导演规划。"""
+
+
 # ── 4x4 宫格分镜 Prompt ──────────────────────────────────────────
 
 GRID_SHOTS_SYSTEM_PROMPT = """你是一个创意视觉化脚本助手（精简关键词版）。
@@ -221,6 +308,9 @@ GRID_SHOTS_USER_PROMPT = """【剧本单元】：
 
 【角色外貌参考】：
 {characters_json}
+
+【导演规划】：
+{director_plan_json}
 
 请生成16个分镜的英文 prompt（每个面板为 9:16 竖屏构图）。"""
 
@@ -341,6 +431,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     display_name = "旁白漫剧 V2"
     stages = [
         "storyboard",
+        "director_plan",
         "char_refs",
         "scene_refs",
         "storyboard_grids",
@@ -437,10 +528,131 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         return StageResult(success=True)
 
     # ================================================================
+    # Stage 1.5: Director Plan (全局 Visual Bible + 单元导演计划)
+    # ================================================================
+    def stage_director_plan(self, ctx: WorkflowContext) -> StageResult:
+        """Stage 1.5: 导演规划 — 全局 Visual Bible + 每 unit 导演计划"""
+
+        plan_path = os.path.join(ctx.output_dir, "director_plan.json")
+
+        # 断点恢复
+        if os.path.exists(plan_path) and os.path.getsize(plan_path) > 100:
+            ctx.log("  ★ 断点恢复: 加载已有 director_plan.json")
+            with open(plan_path) as f:
+                plan = json.load(f)
+        else:
+            plan = {}
+
+            # ── Step 1: 生成全局 Visual Bible ──
+            ctx.log("  生成全局 Visual Bible...")
+
+            # 汇总所有 unit 的信息
+            all_units = ctx.segments  # units
+            emotion_tones = list(set(u.get("emotion_tone", "") for u in all_units))
+            chars_summary = ", ".join(
+                f"{c['name']}({c.get('gender','?')})" for c in ctx.characters[:8]
+            )
+
+            # Prepare a condensed storyboard for the LLM
+            condensed = {
+                "units": [
+                    {
+                        "unit_number": u.get("unit_number"),
+                        "title": u.get("title"),
+                        "emotion_tone": u.get("emotion_tone"),
+                        "core_conflict": u.get("core_conflict"),
+                        "ending_hook": u.get("ending_hook"),
+                        "characters": u.get("characters", []),
+                        "key_scenes": [
+                            {"location": s.get("location", "")}
+                            for s in u.get("key_scenes", [])
+                        ],
+                    }
+                    for u in all_units
+                ],
+                "character_profiles": [
+                    {"char_id": c["char_id"], "name": c["name"],
+                     "gender": c.get("gender",""), "appearance_prompt": c.get("appearance_prompt","")}
+                    for c in ctx.characters
+                ],
+            }
+
+            visual_bible = _validated_chat_json(
+                system_prompt=VISUAL_BIBLE_SYSTEM_PROMPT,
+                user_prompt=VISUAL_BIBLE_USER_PROMPT.format(
+                    title=all_units[0].get("title", "") if all_units else "",
+                    num_units=len(all_units),
+                    characters_summary=chars_summary,
+                    emotion_tones=", ".join(emotion_tones),
+                    storyboard_json=json.dumps(condensed, ensure_ascii=False, indent=2),
+                ),
+                required_keys=["color_palette", "art_direction", "character_cinematography"],
+                temperature=0.4,
+                max_tokens=4096,
+            )
+            plan["visual_bible"] = visual_bible
+
+            ctx.log(f"    color_palette: {visual_bible.get('color_palette', {}).get('primary', '?')}")
+            ctx.log(f"    art_direction: {visual_bible.get('art_direction', '?')[:60]}...")
+            ctx.log(f"    motifs: {len(visual_bible.get('recurring_motifs', []))} 个")
+            ctx.log(f"    char rules: {len(visual_bible.get('character_cinematography', []))} 个")
+
+            # ── Step 2: 为每个 unit 生成导演规划 ──
+            plan["unit_plans"] = []
+
+            for ui, unit in enumerate(all_units):
+                un = unit.get("unit_number", ui + 1)
+                title = unit.get("title", "")
+                ctx.log(f"\n  ── 单元 {un}: {title} 导演规划 ──")
+
+                chars_for_llm = [
+                    {"char_id": c["char_id"], "name": c["name"], "gender": c.get("gender","")}
+                    for c in ctx.characters
+                ]
+
+                unit_plan = _validated_chat_json(
+                    system_prompt=UNIT_DIRECTOR_PLAN_SYSTEM_PROMPT,
+                    user_prompt=UNIT_DIRECTOR_PLAN_USER_PROMPT.format(
+                        visual_bible_json=json.dumps(visual_bible, ensure_ascii=False, indent=2),
+                        unit_number=un,
+                        title=title,
+                        emotion_tone=unit.get("emotion_tone", ""),
+                        core_conflict=unit.get("core_conflict", ""),
+                        ending_hook=unit.get("ending_hook", ""),
+                        script_json=json.dumps(unit.get("script", []), ensure_ascii=False, indent=2),
+                        characters_json=json.dumps(chars_for_llm, ensure_ascii=False, indent=2),
+                    ),
+                    required_keys=["emotional_curve", "camera_strategy", "key_compositions"],
+                    temperature=0.4,
+                    max_tokens=4096,
+                )
+
+                plan["unit_plans"].append(unit_plan)
+                ctx.log(f"    情感曲线: {unit_plan.get('emotional_curve', '?')[:50]}...")
+                ctx.log(f"    镜头策略: {unit_plan.get('camera_strategy', '?')[:50]}...")
+                ctx.log(f"    关键构图: {len(unit_plan.get('key_compositions', []))} 组")
+
+            # 保存
+            with open(plan_path, "w", encoding="utf-8") as f:
+                json.dump(plan, f, ensure_ascii=False, indent=2)
+
+        # 存入 context 供后续 stage 使用
+        ctx.storyboard["director_plan"] = plan
+
+        return StageResult(success=True)
+
+    # ================================================================
     # Stage 2: Character Reference Images (三视图)
     # ================================================================
     def stage_char_refs(self, ctx: WorkflowContext) -> StageResult:
         os.makedirs(os.path.join(ctx.output_dir, "characters"), exist_ok=True)
+
+        # Load director_plan from file if not in context (checkpoint resume)
+        if "director_plan" not in ctx.storyboard:
+            dp_path = os.path.join(ctx.output_dir, "director_plan.json")
+            if os.path.exists(dp_path) and os.path.getsize(dp_path) > 100:
+                with open(dp_path) as f:
+                    ctx.storyboard["director_plan"] = json.load(f)
 
         for c in ctx.characters:
             cid = c["char_id"]
@@ -469,6 +681,16 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                 "无文字, 无水印, 高清锐利, 单人"
             )
 
+            # After building base prompt, add director color hint if available
+            dp = ctx.storyboard.get("director_plan", {})
+            vb = dp.get("visual_bible", {})
+            char_cinema = next(
+                (cc for cc in vb.get("character_cinematography", []) if cc.get("char_id") == cid), None)
+            if char_cinema:
+                color_hint = char_cinema.get("color_association", "")
+                if color_hint:
+                    prompt += f", {color_hint} 色调倾向"
+
             version = ctx.candidates.next_version(asset_key)
             paths = generate_image(
                 prompt, width=1472, height=832,
@@ -492,6 +714,13 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # ================================================================
     def stage_scene_refs(self, ctx: WorkflowContext) -> StageResult:
         os.makedirs(os.path.join(ctx.output_dir, "scenes"), exist_ok=True)
+
+        # Load director_plan from file if not in context (checkpoint resume)
+        if "director_plan" not in ctx.storyboard:
+            dp_path = os.path.join(ctx.output_dir, "director_plan.json")
+            if os.path.exists(dp_path) and os.path.getsize(dp_path) > 100:
+                with open(dp_path) as f:
+                    ctx.storyboard["director_plan"] = json.load(f)
 
         char_name_map = {}
         for c in ctx.characters:
@@ -543,6 +772,14 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     f"No text, no watermark, no characters."
                 )
 
+                # After building base prompt, add visual bible color info
+                dp = ctx.storyboard.get("director_plan", {})
+                vb = dp.get("visual_bible", {})
+                art_dir = vb.get("art_direction", "")
+                color_primary = vb.get("color_palette", {}).get("primary", "")
+                if art_dir or color_primary:
+                    prompt += f" Visual style: {art_dir}. Color palette: {color_primary}."
+
                 version = ctx.candidates.next_version(asset_key)
                 out_path = os.path.join(
                     ctx.output_dir, "scenes",
@@ -572,6 +809,13 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
     # ================================================================
     def stage_storyboard_grids(self, ctx: WorkflowContext) -> StageResult:
         os.makedirs(os.path.join(ctx.output_dir, "grids"), exist_ok=True)
+
+        # Load director_plan from file if not in context (checkpoint resume)
+        if "director_plan" not in ctx.storyboard:
+            dp_path = os.path.join(ctx.output_dir, "director_plan.json")
+            if os.path.exists(dp_path) and os.path.getsize(dp_path) > 100:
+                with open(dp_path) as f:
+                    ctx.storyboard["director_plan"] = json.load(f)
 
         char_name_map = {}
         for c in ctx.characters:
@@ -608,6 +852,12 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     grid_data = json.load(f)
             else:
                 ctx.log("    LLM 生成 16 个分镜 prompt...")
+
+                # Load director plan for this unit
+                dp = ctx.storyboard.get("director_plan", {})
+                unit_plans = dp.get("unit_plans", [])
+                unit_plan = next((p for p in unit_plans if p.get("unit_number") == un), {})
+
                 grid_data = _validated_chat_json(
                     system_prompt=GRID_SHOTS_SYSTEM_PROMPT,
                     user_prompt=GRID_SHOTS_USER_PROMPT.format(
@@ -620,6 +870,7 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                         characters_json=json.dumps(
                             chars_appearance,
                             ensure_ascii=False, indent=2),
+                        director_plan_json=json.dumps(unit_plan, ensure_ascii=False, indent=2) if unit_plan else "无",
                     ),
                     required_keys=["shots"],
                     list_key="shots",
@@ -678,6 +929,16 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
             story_context_parts.append(f"Title: {title}")
             story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
             story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
+
+            # Add visual bible info from director plan
+            dp_ctx = ctx.storyboard.get("director_plan", {})
+            vb_ctx = dp_ctx.get("visual_bible", {})
+            art_dir_ctx = vb_ctx.get("art_direction", "")
+            if art_dir_ctx:
+                story_context_parts.append(f"Art direction: {art_dir_ctx}")
+            color_primary_ctx = vb_ctx.get("color_palette", {}).get("primary", "")
+            if color_primary_ctx:
+                story_context_parts.append(f"Color palette: {color_primary_ctx}")
 
             # Scene grouping from shots
             scene_groups = {}
