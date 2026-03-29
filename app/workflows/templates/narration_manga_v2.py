@@ -626,6 +626,8 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
                     temperature=0.4,
                     max_tokens=4096,
                 )
+                # 保底注入 unit_number（防止 LLM 遗漏）
+                unit_plan["unit_number"] = un
 
                 plan["unit_plans"].append(unit_plan)
                 ctx.log(f"    情感曲线: {unit_plan.get('emotional_curve', '?')[:50]}...")
@@ -2122,6 +2124,12 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         stages_status["storyboard"] = (
             "completed" if sb_exists else "pending")
 
+        # director_plan
+        dp_path = os.path.join(output_dir, "director_plan.json")
+        stages_status["director_plan"] = (
+            "completed" if os.path.exists(dp_path)
+            and os.path.getsize(dp_path) > 100 else "pending")
+
         char_dir = os.path.join(output_dir, "characters")
         char_refs = (
             [f for f in os.listdir(char_dir)
@@ -2875,6 +2883,19 @@ class NarrationMangaV2Workflow(InteractiveOpsMixin, BaseWorkflow):
         story_context_parts.append(f"Title: {title}")
         story_context_parts.append(f"Emotion: {unit.get('emotion_tone', '')}")
         story_context_parts.append(f"Conflict: {unit.get('core_conflict', '')}")
+
+        # Director plan: art_direction + color_palette
+        dp_path = os.path.join(output_dir, "director_plan.json")
+        if os.path.exists(dp_path):
+            with open(dp_path) as f:
+                dp = json.load(f)
+            vb = dp.get("visual_bible", {})
+            art_dir = vb.get("art_direction", "")
+            color_primary = vb.get("color_palette", {}).get("primary", "")
+            if art_dir:
+                story_context_parts.append(f"Art direction: {art_dir}")
+            if color_primary:
+                story_context_parts.append(f"Color palette: {color_primary}")
 
         # Scene grouping from shots
         scene_groups = {}
